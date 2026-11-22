@@ -35,7 +35,6 @@ export function useSessionState<T>(
     } catch {
       // Ignore.
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
   useEffect(() => {

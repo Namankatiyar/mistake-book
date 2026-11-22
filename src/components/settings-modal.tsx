@@ -3,13 +3,18 @@
 import { useState, type ReactNode } from "react";
 import { Button, ConfirmAction, IconButton, Kbd, Modal, Toggle } from "@/components/ui";
 import { useLibrary } from "@/lib/library";
-import { useSettings, type Theme } from "@/lib/settings";
+import { useSettings, type Theme, type ExamMode } from "@/lib/settings";
 import { useToast } from "@/lib/toast";
 
 const THEMES: { id: Theme; label: string }[] = [
   { id: "light", label: "Light" },
   { id: "system", label: "System" },
   { id: "dark", label: "Dark" },
+];
+
+const EXAM_MODES: { id: ExamMode; label: string }[] = [
+  { id: "jee", label: "JEE Mains" },
+  { id: "neet", label: "NEET" },
 ];
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -87,6 +92,33 @@ export function SettingsModal({
       {/* Modal Body - Scrollable vertical content */}
       <div className="flex-1 overflow-y-auto px-5 py-5 sm:px-6 space-y-6">
         <Section title="Appearance">
+          <Row
+            title="Target exam"
+            desc="Switches between Mathematics (JEE) and Biology (NEET)."
+            control={
+              <div
+                className="inline-flex h-7 flex-none overflow-hidden rounded-[6px] border border-line"
+                role="group"
+                aria-label="Target exam"
+              >
+                {EXAM_MODES.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    className={`px-2.5 text-[13px] ${
+                      settings.examMode === m.id
+                        ? "bg-soft font-medium text-fg"
+                        : "bg-surface text-muted hover:text-fg"
+                    }`}
+                    aria-pressed={settings.examMode === m.id}
+                    onClick={() => update({ examMode: m.id })}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            }
+          />
           <Row
             title="Theme"
             desc="Dark is easier for late-night sessions."

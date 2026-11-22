@@ -9,7 +9,7 @@ import {
   type SelectHTMLAttributes,
 } from "react";
 import { createPortal } from "react-dom";
-import { FlaskConical, HotAirBalloon, Sigma } from "lucide-react";
+import { FlaskConical, HotAirBalloon, Sigma, Dna } from "lucide-react";
 import type { MistakeTone } from "@/lib/model";
 import {
   Tooltip,
@@ -223,6 +223,14 @@ export function SubjectIcon({
       <Sigma
         size={size}
         className={`shrink-0 text-yellow-500 dark:text-yellow-400 ${className}`}
+        aria-hidden="true"
+      />
+    );
+  } else if (s === "bio" || s === "biology") {
+    icon = (
+      <Dna
+        size={size}
+        className={`shrink-0 text-emerald-500 dark:text-emerald-400 ${className}`}
         aria-hidden="true"
       />
     );

@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import { Atom } from "loading-dev";
 import { useCapture } from "@/components/capture";
 import { QuestionCard } from "@/components/question-card";
 import {
@@ -24,7 +25,12 @@ import {
   type StashMode,
 } from "@/lib/model";
 import { useSettings } from "@/lib/settings";
-import { SYLLABUS, subjectById } from "@/lib/syllabus";
+import {
+  getSyllabus,
+  isValidChapter,
+  subjectById,
+  subjectOfChapter,
+} from "@/lib/syllabus";
 
 type ListState = {
   subjectId: string | null;
@@ -60,21 +66,36 @@ export default function ListPage() {
   const router = useRouter();
   const [state, setState] = useSessionState<ListState>("mb.listState", INITIAL);
 
+  const syllabus = useMemo(
+    () => getSyllabus(settings.examMode),
+    [settings.examMode],
+  );
+
   const set = (patch: Partial<ListState>) =>
     setState((prev) => ({ ...prev, ...patch }));
 
+  // When switching exam modes, if the active filter belongs to a different mode, reset to All
+  useEffect(() => {
+    if (state.subjectId && !syllabus.some((s) => s.id === state.subjectId)) {
+      setState((prev) => ({ ...prev, subjectId: null, chapterId: null }));
+    }
+  }, [syllabus, state.subjectId, setState]);
+
   const counts = useMemo(() => {
+    const activeSubjectIds = new Set(syllabus.map((s) => s.id));
     const bySubject = new Map<string, number>();
     const byChapter = new Map<string, number>();
     let total = 0;
     for (const q of questions) {
       if (q.stashed) continue;
-      total += 1;
+      if (activeSubjectIds.has(q.subjectId)) {
+        total += 1;
+      }
       bySubject.set(q.subjectId, (bySubject.get(q.subjectId) ?? 0) + 1);
       byChapter.set(q.chapterId, (byChapter.get(q.chapterId) ?? 0) + 1);
     }
     return { bySubject, byChapter, total };
-  }, [questions]);
+  }, [questions, syllabus]);
 
   const filtered = useMemo(() => {
     let list = questions.filter((q) =>
@@ -88,6 +109,9 @@ export default function ListPage() {
       list = list.filter((q) => q.chapterId === state.chapterId);
     } else if (state.subjectId) {
       list = list.filter((q) => q.subjectId === state.subjectId);
+    } else {
+      const activeSubjectIds = new Set(syllabus.map((s) => s.id));
+      list = list.filter((q) => activeSubjectIds.has(q.subjectId));
     }
     if (state.mistake === "none") {
       list = list.filter((q) => !q.mistakeId);
@@ -100,7 +124,7 @@ export default function ListPage() {
       list = list.filter((q) => q.sourceId === state.source);
     }
     return sortQuestions(list, state.sort);
-  }, [questions, state]);
+  }, [questions, state, syllabus]);
 
   const openViewer = (id: string) => {
     // Freeze the filtered, sorted order for the viewer session.
@@ -122,8 +146,6 @@ export default function ListPage() {
     state.source !== "all" ||
     state.stash !== "active";
 
-  const mobileSubject = state.subjectId ? subjectById(state.subjectId) : null;
-
   return (
     <div className="mx-auto flex max-w-[1400px] gap-8 px-4 sm:px-6">
       {/* Sidebar tree: subject → chapter */}
@@ -138,7 +160,7 @@ export default function ListPage() {
           <span className="tnum">{counts.total}</span>
         </button>
         <div className="mt-3 space-y-1">
-          {SYLLABUS.map((s) => {
+          {syllabus.map((s) => {
             const expanded = !!state.expanded[s.id];
             return (
               <div key={s.id}>
@@ -220,12 +242,19 @@ export default function ListPage() {
               small
               aria-label="Filter by subject"
               value={state.subjectId ?? ""}
-              onChange={(e) =>
-                set({ subjectId: e.target.value || null, chapterId: null })
-              }
+              onChange={(e) => {
+                const newSub = e.target.value || null;
+                set({
+                  subjectId: newSub,
+                  chapterId:
+                    state.chapterId && newSub && isValidChapter(newSub, state.chapterId)
+                      ? state.chapterId
+                      : null,
+                });
+              }}
             >
               <option value="">All subjects</option>
-              {SYLLABUS.map((s) => (
+              {syllabus.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>
@@ -236,13 +265,39 @@ export default function ListPage() {
               className="w-full"
               aria-label="Filter by chapter"
               value={state.chapterId ?? ""}
-              subjectId={mobileSubject?.id}
-              disabled={!mobileSubject}
+              subjectId={state.subjectId}
               allOptionLabel="All chapters"
-              onChange={(chId) => set({ chapterId: chId || null })}
+              onChange={(chId, subId) => {
+                if (!chId) {
+                  set({ chapterId: null });
+                } else {
+                  set({
+                    chapterId: chId,
+                    subjectId: state.subjectId ?? subId ?? subjectOfChapter(chId)?.id ?? null,
+                  });
+                }
+              }}
             />
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <SearchableChapterSelect
+              small
+              className="hidden lg:inline-block w-[180px]"
+              aria-label="Filter by chapter"
+              value={state.chapterId ?? ""}
+              subjectId={state.subjectId}
+              allOptionLabel="All chapters"
+              onChange={(chId, subId) => {
+                if (!chId) {
+                  set({ chapterId: null });
+                } else {
+                  set({
+                    chapterId: chId,
+                    subjectId: state.subjectId ?? subId ?? subjectOfChapter(chId)?.id ?? null,
+                  });
+                }
+              }}
+            />
             <Select
               small
               className="w-[168px]"
@@ -329,9 +384,14 @@ export default function ListPage() {
 
         <div className="w-full space-y-6 py-6">
           {!ready ? (
-            <p className="py-10 text-[14px] text-muted">
-              Opening your local library…
-            </p>
+            <div
+              className="flex min-h-[50vh] flex-col items-center justify-center gap-3"
+              role="status"
+              aria-label="Loading library"
+            >
+              <Atom size={48} className="text-muted" />
+              <p className="text-[12px] text-muted tracking-wide">loading...</p>
+            </div>
           ) : questions.length === 0 ? (
             <div className="panel p-6 sm:p-8">
               <h1 className="text-[20px] font-semibold">
@@ -365,7 +425,7 @@ export default function ListPage() {
               </Button>
             </div>
           ) : filtered.length === 0 ? (
-            <div className="py-10">
+            <div>
               <p className="text-[14px] text-muted">
                 Nothing matches these filters.
               </p>

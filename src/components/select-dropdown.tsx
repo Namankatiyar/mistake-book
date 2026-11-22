@@ -17,7 +17,8 @@ import {
 import { createPortal } from "react-dom";
 import { Search } from "lucide-react";
 import { Icon, SubjectIcon } from "./ui";
-import { SYLLABUS, chapterById, subjectById, type Chapter } from "@/lib/syllabus";
+import { useSettings } from "@/lib/settings";
+import { getSyllabus, chapterById, subjectById, subjectOfChapter, type Chapter } from "@/lib/syllabus";
 
 /* -------------------------------------------------------------------------- */
 /*                                Types & Models                               */
@@ -568,6 +569,11 @@ export function SearchableChapterSelect({
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const listboxId = useId();
+  const { settings } = useSettings();
+  const syllabus = useMemo(
+    () => getSyllabus(settings.examMode),
+    [settings.examMode],
+  );
 
   // Retrieve selected chapter and subject info
   const selectedChapter = useMemo(() => {
@@ -579,10 +585,12 @@ export function SearchableChapterSelect({
     if (!selectedChapter) {
       return subjectId ? subjectById(subjectId) : null;
     }
-    return SYLLABUS.find((s) =>
-      s.chapters.some((c) => c.id === selectedChapter.id),
+    return (
+      syllabus.find((s) =>
+        s.chapters.some((c) => c.id === selectedChapter.id),
+      ) ?? subjectOfChapter(selectedChapter.id)
     );
-  }, [selectedChapter, subjectId]);
+  }, [selectedChapter, subjectId, syllabus]);
 
   // Build the list of chapters to display
   const chaptersList = useMemo<{
@@ -601,15 +609,15 @@ export function SearchableChapterSelect({
         });
       }
     } else {
-      // All subjects
-      SYLLABUS.forEach((s) => {
+      // All subjects in active syllabus
+      syllabus.forEach((s) => {
         s.chapters.forEach((c) => {
           list.push({ chapter: c, subjectId: s.id, subjectName: s.name });
         });
       });
     }
     return list;
-  }, [subjectId, allowAllSubjects]);
+  }, [subjectId, allowAllSubjects, syllabus]);
 
   // Filter chapters based on search query
   const filteredChapters = useMemo(() => {

@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useLibrary } from "@/lib/library";
 import { MISTAKE_TYPES } from "@/lib/model";
-import { SYLLABUS, subjectById } from "@/lib/syllabus";
+import { useSettings } from "@/lib/settings";
+import { getSyllabus, subjectById } from "@/lib/syllabus";
 import { Button, Field, Icon, SearchableChapterSelect, Select } from "./ui";
 
 export function SubjectChapterFields({
@@ -15,7 +16,12 @@ export function SubjectChapterFields({
   chapterId: string;
   onChange: (subjectId: string, chapterId: string) => void;
 }) {
-  const subject = subjectById(subjectId) ?? SYLLABUS[0];
+  const { settings } = useSettings();
+  const syllabus = getSyllabus(settings.examMode);
+  const subject =
+    syllabus.find((s) => s.id === subjectId) ??
+    subjectById(subjectId) ??
+    syllabus[0];
   return (
     <>
       <Field label="Subject">
@@ -23,11 +29,14 @@ export function SubjectChapterFields({
           className="w-full"
           value={subject.id}
           onChange={(e) => {
-            const next = subjectById(e.target.value) ?? SYLLABUS[0];
+            const next =
+              syllabus.find((s) => s.id === e.target.value) ??
+              subjectById(e.target.value) ??
+              syllabus[0];
             onChange(next.id, next.chapters[0].id);
           }}
         >
-          {SYLLABUS.map((s) => (
+          {syllabus.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
             </option>

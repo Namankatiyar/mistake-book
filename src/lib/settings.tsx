@@ -9,12 +9,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { isValidChapter, subjectById } from "./syllabus";
+import { isValidChapter, subjectById, type ExamMode } from "./syllabus";
 
 export type Theme = "system" | "light" | "dark";
+export type { ExamMode };
 
 export type Settings = {
   theme: Theme;
+  examMode: ExamMode;
   /** Global show/hide for answer keys and notes in the list view. */
   showAnswers: boolean;
   /** Show the thin line of tags in the viewer. */
@@ -25,6 +27,7 @@ export type Settings = {
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
+  examMode: "jee",
   showAnswers: false,
   viewerTags: true,
   viewerEdit: false,
@@ -37,7 +40,12 @@ export function readSettings(): Settings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) };
+    const parsed = JSON.parse(raw) as Partial<Settings>;
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      examMode: parsed.examMode === "neet" ? "neet" : "jee",
+    };
   } catch {
     return DEFAULT_SETTINGS;
   }
