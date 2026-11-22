@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { SettingsModal } from "./settings-modal";
@@ -101,7 +102,15 @@ export function Header() {
       <header className="border-b border-line bg-bg">
         <div className="flex h-14 w-full items-center justify-between px-4 sm:px-6">
           <div className="flex items-center gap-2.5">
-            <Link href="/" className="flex items-baseline">
+            <Link href="/" className="flex items-center gap-2">
+              <Image
+                src="/mistake-book.png"
+                alt="Mistake book icon"
+                width={22}
+                height={22}
+                priority
+                className="h-[22px] w-[22px] rounded-[4px] object-contain"
+              />
               <span className="text-[16px] font-semibold text-fg">Mistake book</span>
             </Link>
 
