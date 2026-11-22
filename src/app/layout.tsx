@@ -1,0 +1,42 @@
+import type { Metadata } from "next";
+import type { ReactNode } from "react";
+import Script from "next/script";
+import "@fontsource/inter/400.css";
+import "@fontsource/inter/500.css";
+import "@fontsource/inter/600.css";
+import "./globals.css";
+import { CaptureProvider } from "@/components/capture";
+import { Header } from "@/components/header";
+import { LibraryProvider } from "@/lib/library";
+import { SettingsProvider, THEME_SCRIPT } from "@/lib/settings";
+import { ToastProvider } from "@/lib/toast";
+
+export const metadata: Metadata = {
+  title: "Mistake book · JEE Mains",
+  description:
+    "A local mistake notebook for JEE Mains prep. Paste questions you got wrong, label them, and revise them fast.",
+};
+
+export default function RootLayout({ children }: { children: ReactNode }) {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <Script id="theme-script" strategy="beforeInteractive">
+          {THEME_SCRIPT}
+        </Script>
+      </head>
+      <body>
+        <SettingsProvider>
+          <ToastProvider>
+            <LibraryProvider>
+              <CaptureProvider>
+                <Header />
+                {children}
+              </CaptureProvider>
+            </LibraryProvider>
+          </ToastProvider>
+        </SettingsProvider>
+      </body>
+    </html>
+  );
+}
