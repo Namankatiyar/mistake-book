@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Atom } from "loading-dev";
+import { ShieldCheck, FileText } from "lucide-react";
 import { useCapture } from "@/components/capture";
 import { QuestionCard } from "@/components/question-card";
 import {
@@ -229,6 +231,26 @@ export default function ListPage() {
           You can directly drag and drop images onto here or press{" "}
           <Kbd>Ctrl + V</Kbd> to add mistakes
         </div>
+
+        <div className="mt-5 border-t border-line/70 pt-3.5 space-y-1">
+          <div className="px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-muted">
+            Legal &amp; Privacy
+          </div>
+          <Link
+            href="/privacy"
+            className="side-row flex items-center gap-2 text-muted hover:text-fg"
+          >
+            <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+            <span className="flex-1">Privacy Policy</span>
+          </Link>
+          <Link
+            href="/terms"
+            className="side-row flex items-center gap-2 text-muted hover:text-fg"
+          >
+            <FileText className="h-3.5 w-3.5 shrink-0" />
+            <span className="flex-1">Terms of Service</span>
+          </Link>
+        </div>
       </aside>
 
       {/* Question column */}
@@ -420,6 +442,24 @@ export default function ListPage() {
             </div>
           )}
         </div>
+
+        <footer className="mt-8 border-t border-line pt-4 pb-10 flex flex-wrap items-center justify-between gap-3 text-[12px] text-muted lg:hidden">
+          <span>Mistake book</span>
+          <div className="flex items-center gap-4">
+            <Link
+              href="/privacy"
+              className="text-muted hover:text-fg underline underline-offset-4"
+            >
+              Privacy Policy
+            </Link>
+            <Link
+              href="/terms"
+              className="text-muted hover:text-fg underline underline-offset-4"
+            >
+              Terms of Service
+            </Link>
+          </div>
+        </footer>
       </main>
     </div>
   );

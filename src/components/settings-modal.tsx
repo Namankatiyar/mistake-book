@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { AlertCircle, RefreshCw, RotateCw } from "lucide-react";
 import { Button, ConfirmAction, IconButton, Kbd, Modal, Toggle } from "@/components/ui";
 import { useLibrary } from "@/lib/library";
@@ -624,6 +625,27 @@ export function SettingsModal({
           IndexedDB. When connected, changes automatically back up to your personal
           Google Drive under the MistakeBook folder.
         </p>
+
+        <div className="border-t border-line pt-3 flex flex-wrap items-center justify-between gap-2 text-[12px] text-muted">
+          <span>Privacy &amp; Terms</span>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/privacy"
+              onClick={onClose}
+              className="text-muted hover:text-fg underline underline-offset-4"
+            >
+              Privacy Policy
+            </Link>
+            <span>•</span>
+            <Link
+              href="/terms"
+              onClick={onClose}
+              className="text-muted hover:text-fg underline underline-offset-4"
+            >
+              Terms of Service
+            </Link>
+          </div>
+        </div>
       </div>
     </Modal>
   );
