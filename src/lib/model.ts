@@ -2,6 +2,8 @@ export type Question = {
   id: string;
   image: Blob;
   createdAt: number;
+  updatedAt: number;
+  syncedAt: number | null;
   subjectId: string;
   chapterId: string;
   mistakeId: string | null;
@@ -12,12 +14,17 @@ export type Question = {
   /** Local day key (YYYY-MM-DD) of the last counted revision. */
   lastRevisionDay: string | null;
   stashed: boolean;
+  driveFileId: string | null;
+  isDeleted: boolean;
 };
 
 export type Source = {
   id: string;
   name: string;
   createdAt: number;
+  updatedAt: number;
+  syncedAt: number | null;
+  isDeleted: boolean;
 };
 
 export type MistakeTone = "red" | "orange" | "yellow";

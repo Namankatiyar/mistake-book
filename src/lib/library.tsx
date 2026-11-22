@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  enqueueSyncItem,
   loadAll,
   putQuestion,
   putQuestions,
@@ -45,7 +46,7 @@ type LibraryContextValue = {
   deleteSource: (id: string) => Promise<void>;
 };
 
-const LibraryContext = createContext<LibraryContextValue | null>(null);
+export const LibraryContext = createContext<LibraryContextValue | null>(null);
 
 export function LibraryProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
@@ -59,29 +60,43 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    loadAll()
-      .then((data) => {
-        if (cancelled) return;
-        setQuestions(data.questions);
-        setSources(data.sources);
-        setReady(true);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setReady(true);
-        push("Couldn't open local storage in this browser");
-      });
+    const reload = () => {
+      loadAll()
+        .then((data) => {
+          if (cancelled) return;
+          setQuestions(data.questions);
+          setSources(data.sources);
+          setReady(true);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setReady(true);
+          push("Couldn't open local storage in this browser");
+        });
+    };
+
+    reload();
+
+    const handleReload = () => {
+      reload();
+    };
+    window.addEventListener("mb:library-reload", handleReload);
+
     return () => {
       cancelled = true;
+      window.removeEventListener("mb:library-reload", handleReload);
     };
   }, [push]);
 
   const addQuestion = useCallback(
     async (input: NewQuestion): Promise<Question | null> => {
+      const now = Date.now();
       const q: Question = {
         id: newId(),
         image: input.image,
-        createdAt: Date.now(),
+        createdAt: now,
+        updatedAt: now,
+        syncedAt: null,
         subjectId: input.subjectId,
         chapterId: input.chapterId,
         mistakeId: input.mistakeId,
@@ -91,9 +106,12 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         revisionCount: 0,
         lastRevisionDay: null,
         stashed: false,
+        driveFileId: null,
+        isDeleted: false,
       };
       try {
         await putQuestion(q);
+        await enqueueSyncItem("question", q.id, "upsert");
       } catch {
         push("Couldn't save — browser storage may be full");
         return null;
@@ -108,9 +126,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     async (id: string, patch: Partial<Question>) => {
       const current = questionsRef.current.find((q) => q.id === id);
       if (!current) return;
-      const next: Question = { ...current, ...patch, id };
+      const next: Question = { ...current, ...patch, id, updatedAt: Date.now() };
       try {
         await putQuestion(next);
+        await enqueueSyncItem("question", id, "upsert");
       } catch {
         push("Couldn't save changes");
         return;
@@ -120,10 +139,19 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     [push],
   );
 
-  const deleteQuestion = useCallback(async (id: string) => {
-    await removeQuestion(id);
-    setQuestions((prev) => prev.filter((q) => q.id !== id));
-  }, []);
+  const deleteQuestion = useCallback(
+    async (id: string) => {
+      try {
+        await removeQuestion(id);
+        await enqueueSyncItem("question", id, "delete");
+      } catch {
+        push("Couldn't delete question");
+        return;
+      }
+      setQuestions((prev) => prev.filter((q) => q.id !== id));
+    },
+    [push],
+  );
 
   const resetRevisions = useCallback(
     async (id: string) => {
@@ -154,32 +182,58 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         (s) => s.name.toLowerCase() === trimmed.toLowerCase(),
       );
       if (existing) return existing;
+      const now = Date.now();
       const source: Source = {
         id: newId(),
         name: trimmed,
-        createdAt: Date.now(),
+        createdAt: now,
+        updatedAt: now,
+        syncedAt: null,
+        isDeleted: false,
       };
-      await putSource(source);
+      try {
+        await putSource(source);
+        await enqueueSyncItem("source", source.id, "upsert");
+      } catch {
+        push("Couldn't save source");
+        return null;
+      }
       setSources((prev) =>
         [...prev, source].sort((a, b) => a.name.localeCompare(b.name)),
       );
       return source;
     },
-    [],
+    [push],
   );
 
-  const deleteSource = useCallback(async (id: string) => {
-    await removeSource(id);
-    const affected = questionsRef.current
-      .filter((q) => q.sourceId === id)
-      .map((q) => ({ ...q, sourceId: null }));
-    await putQuestions(affected);
-    const affectedIds = new Set(affected.map((q) => q.id));
-    setQuestions((prev) =>
-      prev.map((q) => (affectedIds.has(q.id) ? { ...q, sourceId: null } : q)),
-    );
-    setSources((prev) => prev.filter((s) => s.id !== id));
-  }, []);
+  const deleteSource = useCallback(
+    async (id: string) => {
+      try {
+        await removeSource(id);
+        await enqueueSyncItem("source", id, "delete");
+      } catch {
+        push("Couldn't delete source");
+        return;
+      }
+      const affected = questionsRef.current
+        .filter((q) => q.sourceId === id)
+        .map((q) => ({ ...q, sourceId: null, updatedAt: Date.now() }));
+      try {
+        await putQuestions(affected);
+        for (const q of affected) {
+          await enqueueSyncItem("question", q.id, "upsert");
+        }
+      } catch {
+        push("Couldn't update questions referencing this source");
+      }
+      const affectedIds = new Set(affected.map((q) => q.id));
+      setQuestions((prev) =>
+        prev.map((q) => (affectedIds.has(q.id) ? { ...q, sourceId: null, updatedAt: Date.now() } : q)),
+      );
+      setSources((prev) => prev.filter((s) => s.id !== id));
+    },
+    [push],
+  );
 
   const value = useMemo(
     () => ({
