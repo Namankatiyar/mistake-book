@@ -2,7 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
 import { eq, desc } from "drizzle-orm";
 import * as schema from "@/db/schema";
-import type { Question, Source } from "./model";
+import { newId, type Question, type Source } from "./model";
 
 type PGliteInstance = {
   client: PGlite;
@@ -50,6 +50,39 @@ export async function getDb(): Promise<PGliteInstance> {
 
         CREATE INDEX IF NOT EXISTS idx_questions_created_at ON questions(created_at);
         CREATE INDEX IF NOT EXISTS idx_questions_subject ON questions(subject_id);
+
+        -- Backward-compatible column additions
+        ALTER TABLE questions ADD COLUMN IF NOT EXISTS updated_at BIGINT;
+        ALTER TABLE questions ADD COLUMN IF NOT EXISTS synced_at BIGINT;
+        ALTER TABLE questions ADD COLUMN IF NOT EXISTS drive_file_id TEXT;
+        ALTER TABLE questions ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
+        UPDATE questions SET updated_at = created_at WHERE updated_at IS NULL;
+
+        ALTER TABLE sources ADD COLUMN IF NOT EXISTS updated_at BIGINT;
+        ALTER TABLE sources ADD COLUMN IF NOT EXISTS synced_at BIGINT;
+        ALTER TABLE sources ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
+        UPDATE sources SET updated_at = created_at WHERE updated_at IS NULL;
+
+        -- Outbox Queue
+        CREATE TABLE IF NOT EXISTS sync_queue (
+          id TEXT PRIMARY KEY,
+          entity_type TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          created_at BIGINT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          last_attempt_at BIGINT,
+          last_error TEXT,
+          status TEXT NOT NULL DEFAULT 'pending'
+        );
+        CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, created_at);
+
+        -- Key-value store for Drive Folder IDs & Sync Checkpoints
+        CREATE TABLE IF NOT EXISTS sync_metadata (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at BIGINT NOT NULL
+        );
       `);
 
       const db = drizzle(client, { schema });
@@ -76,6 +109,8 @@ function mapRowToQuestion(row: schema.DbQuestion): Question {
     id: row.id,
     image: uint8ArrayToBlob(row.image),
     createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt ?? row.createdAt),
+    syncedAt: row.syncedAt != null ? Number(row.syncedAt) : null,
     subjectId: row.subjectId,
     chapterId: row.chapterId,
     mistakeId: row.mistakeId,
@@ -85,6 +120,8 @@ function mapRowToQuestion(row: schema.DbQuestion): Question {
     revisionCount: row.revisionCount,
     lastRevisionDay: row.lastRevisionDay,
     stashed: Boolean(row.stashed),
+    driveFileId: row.driveFileId ?? null,
+    isDeleted: Boolean(row.isDeleted),
   };
 }
 
@@ -95,8 +132,15 @@ export async function loadAll(): Promise<{
   if (!isBrowser()) return { questions: [], sources: [] };
   const { db } = await getDb();
   const [qRows, sRows] = await Promise.all([
-    db.select().from(schema.questions).orderBy(desc(schema.questions.createdAt)),
-    db.select().from(schema.sources),
+    db
+      .select()
+      .from(schema.questions)
+      .where(eq(schema.questions.isDeleted, false))
+      .orderBy(desc(schema.questions.createdAt)),
+    db
+      .select()
+      .from(schema.sources)
+      .where(eq(schema.sources.isDeleted, false)),
   ]);
 
   const questions = qRows.map(mapRowToQuestion);
@@ -105,6 +149,9 @@ export async function loadAll(): Promise<{
       id: r.id,
       name: r.name,
       createdAt: Number(r.createdAt),
+      updatedAt: Number(r.updatedAt ?? r.createdAt),
+      syncedAt: r.syncedAt != null ? Number(r.syncedAt) : null,
+      isDeleted: Boolean(r.isDeleted),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -114,12 +161,15 @@ export async function loadAll(): Promise<{
 export async function putQuestion(q: Question): Promise<void> {
   const { db } = await getDb();
   const imageBytes = await blobToUint8Array(q.image);
+  const updatedAt = q.updatedAt || Date.now();
   await db
     .insert(schema.questions)
     .values({
       id: q.id,
       image: imageBytes,
       createdAt: q.createdAt,
+      updatedAt,
+      syncedAt: q.syncedAt ?? null,
       subjectId: q.subjectId,
       chapterId: q.chapterId,
       mistakeId: q.mistakeId,
@@ -129,12 +179,16 @@ export async function putQuestion(q: Question): Promise<void> {
       revisionCount: q.revisionCount,
       lastRevisionDay: q.lastRevisionDay,
       stashed: q.stashed,
+      driveFileId: q.driveFileId ?? null,
+      isDeleted: q.isDeleted ?? false,
     })
     .onConflictDoUpdate({
       target: schema.questions.id,
       set: {
         image: imageBytes,
         createdAt: q.createdAt,
+        updatedAt,
+        syncedAt: q.syncedAt ?? null,
         subjectId: q.subjectId,
         chapterId: q.chapterId,
         mistakeId: q.mistakeId,
@@ -144,6 +198,8 @@ export async function putQuestion(q: Question): Promise<void> {
         revisionCount: q.revisionCount,
         lastRevisionDay: q.lastRevisionDay,
         stashed: q.stashed,
+        driveFileId: q.driveFileId ?? null,
+        isDeleted: q.isDeleted ?? false,
       },
     });
 }
@@ -157,28 +213,68 @@ export async function putQuestions(qs: Question[]): Promise<void> {
 
 export async function removeQuestion(id: string): Promise<void> {
   const { db } = await getDb();
-  await db.delete(schema.questions).where(eq(schema.questions.id, id));
+  await db
+    .update(schema.questions)
+    .set({
+      isDeleted: true,
+      updatedAt: Date.now(),
+    })
+    .where(eq(schema.questions.id, id));
 }
 
 export async function putSource(s: Source): Promise<void> {
   const { db } = await getDb();
+  const updatedAt = s.updatedAt || Date.now();
   await db
     .insert(schema.sources)
     .values({
       id: s.id,
       name: s.name,
       createdAt: s.createdAt,
+      updatedAt,
+      syncedAt: s.syncedAt ?? null,
+      isDeleted: s.isDeleted ?? false,
     })
     .onConflictDoUpdate({
       target: schema.sources.id,
       set: {
         name: s.name,
         createdAt: s.createdAt,
+        updatedAt,
+        syncedAt: s.syncedAt ?? null,
+        isDeleted: s.isDeleted ?? false,
       },
     });
 }
 
 export async function removeSource(id: string): Promise<void> {
   const { db } = await getDb();
-  await db.delete(schema.sources).where(eq(schema.sources.id, id));
+  await db
+    .update(schema.sources)
+    .set({
+      isDeleted: true,
+      updatedAt: Date.now(),
+    })
+    .where(eq(schema.sources.id, id));
+}
+
+export async function enqueueSyncItem(
+  entityType: string,
+  entityId: string,
+  action: string
+): Promise<void> {
+  if (!isBrowser()) return;
+  const { db } = await getDb();
+  await db.insert(schema.syncQueue).values({
+    id: newId(),
+    entityType,
+    entityId,
+    action,
+    createdAt: Date.now(),
+    attempts: 0,
+    status: "pending",
+  });
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("mb:sync-enqueue"));
+  }
 }

@@ -10,6 +10,7 @@ import { Header } from "@/components/header";
 import { Toaster } from "@/components/toaster";
 import { LibraryProvider } from "@/lib/library";
 import { SettingsProvider, THEME_SCRIPT } from "@/lib/settings";
+import { SyncProvider } from "@/lib/sync-context";
 import { ToastProvider } from "@/lib/toast";
 
 export const metadata: Metadata = {
@@ -30,10 +31,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <SettingsProvider>
           <ToastProvider>
             <LibraryProvider>
-              <CaptureProvider>
-                <Header />
-                {children}
-              </CaptureProvider>
+              <SyncProvider>
+                <CaptureProvider>
+                  <Header />
+                  {children}
+                </CaptureProvider>
+              </SyncProvider>
             </LibraryProvider>
           </ToastProvider>
           <Toaster />
