@@ -40,19 +40,28 @@ export type SyncContextValue = {
 
 const SyncContext = createContext<SyncContextValue | null>(null);
 
+const DEFAULT_SYNC_PROGRESS: SyncProgress = {
+  status: "idle",
+  pending: 0,
+  processed: 0,
+  total: 0,
+};
+
 export function SyncProvider({ children }: { children: ReactNode }) {
   const libraryCtx = useContext(LibraryContext);
   const isLibraryReady = libraryCtx ? libraryCtx.ready : true;
 
   const [authStatus, setAuthStatus] = useState<AuthStatus>({ connected: false });
-  const [syncProgress, setSyncProgress] = useState<SyncProgress>({
-    status: typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "idle",
-    pending: 0,
-    processed: 0,
-    total: 0,
-  });
+  const [syncProgress, setSyncProgress] = useState<SyncProgress>(DEFAULT_SYNC_PROGRESS);
 
   const runnerRef = useRef<SyncRunner | null>(null);
+
+  // Check if offline on initial client mount
+  useEffect(() => {
+    if (typeof window !== "undefined" && !navigator.onLine) {
+      setSyncProgress((prev) => ({ ...prev, status: "offline" }));
+    }
+  }, []);
 
   const fetchAuthStatus = useCallback(async (): Promise<AuthStatus> => {
     try {

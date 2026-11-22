@@ -14,7 +14,12 @@ export function Header() {
   const { syncProgress, authStatus } = useDriveSync();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Cloud status pill state
   let dotColor = "bg-orange-500";
@@ -22,48 +27,50 @@ export function Header() {
   let pillTooltip = "Drive disconnected — click to connect";
   let isSyncing = false;
 
-  if (syncProgress.status === "offline") {
-    dotColor = "bg-neutral-400 dark:bg-neutral-500";
-    pillLabel = "Offline";
-    pillTooltip = "Offline (changes saved locally)";
-  } else if (!authStatus.connected || syncProgress.status === "unauthenticated") {
-    dotColor = "bg-orange-500";
-    pillLabel = "Drive disconnected";
-    pillTooltip = "Drive disconnected — click to connect";
-  } else if (syncProgress.status === "syncing") {
-    dotColor = "bg-amber-500";
-    isSyncing = true;
-    const count =
-      syncProgress.pending > 0
-        ? syncProgress.pending
-        : syncProgress.total > 0
-          ? Math.max(0, syncProgress.total - syncProgress.processed)
-          : 0;
-    pillLabel = count > 0 ? `Syncing (${count})…` : "Syncing…";
-    pillTooltip =
-      count > 0
-        ? `Syncing ${count} pending items`
-        : "Syncing changes to Google Drive…";
-  } else if (syncProgress.status === "error") {
-    const isReauth =
-      syncProgress.lastError?.toLowerCase().includes("auth") ||
-      syncProgress.lastError?.toLowerCase().includes("token") ||
-      syncProgress.lastError?.toLowerCase().includes("unauthorized") ||
-      syncProgress.lastError?.toLowerCase().includes("login");
-    dotColor = isReauth ? "bg-orange-500" : "bg-red-500";
-    pillLabel = isReauth ? "Re-auth needed" : "Sync error";
-    pillTooltip = isReauth
-      ? "Re-auth needed — click to reconnect"
-      : syncProgress.lastError || "Sync error — click to view";
-  } else if (syncProgress.pending > 0) {
-    dotColor = "bg-amber-500";
-    isSyncing = true;
-    pillLabel = `Syncing (${syncProgress.pending})…`;
-    pillTooltip = `${syncProgress.pending} changes pending sync`;
-  } else {
-    dotColor = "bg-emerald-500";
-    pillLabel = "Cloud: Synced";
-    pillTooltip = "Cloud: Synced";
+  if (mounted) {
+    if (syncProgress.status === "offline") {
+      dotColor = "bg-neutral-400 dark:bg-neutral-500";
+      pillLabel = "Offline";
+      pillTooltip = "Offline (changes saved locally)";
+    } else if (!authStatus.connected || syncProgress.status === "unauthenticated") {
+      dotColor = "bg-orange-500";
+      pillLabel = "Drive disconnected";
+      pillTooltip = "Drive disconnected — click to connect";
+    } else if (syncProgress.status === "syncing") {
+      dotColor = "bg-amber-500";
+      isSyncing = true;
+      const count =
+        syncProgress.pending > 0
+          ? syncProgress.pending
+          : syncProgress.total > 0
+            ? Math.max(0, syncProgress.total - syncProgress.processed)
+            : 0;
+      pillLabel = count > 0 ? `Syncing (${count})…` : "Syncing…";
+      pillTooltip =
+        count > 0
+          ? `Syncing ${count} pending items`
+          : "Syncing changes to Google Drive…";
+    } else if (syncProgress.status === "error") {
+      const isReauth =
+        syncProgress.lastError?.toLowerCase().includes("auth") ||
+        syncProgress.lastError?.toLowerCase().includes("token") ||
+        syncProgress.lastError?.toLowerCase().includes("unauthorized") ||
+        syncProgress.lastError?.toLowerCase().includes("login");
+      dotColor = isReauth ? "bg-orange-500" : "bg-red-500";
+      pillLabel = isReauth ? "Re-auth needed" : "Sync error";
+      pillTooltip = isReauth
+        ? "Re-auth needed — click to reconnect"
+        : syncProgress.lastError || "Sync error — click to view";
+    } else if (syncProgress.pending > 0) {
+      dotColor = "bg-amber-500";
+      isSyncing = true;
+      pillLabel = `Syncing (${syncProgress.pending})…`;
+      pillTooltip = `${syncProgress.pending} changes pending sync`;
+    } else {
+      dotColor = "bg-emerald-500";
+      pillLabel = "Cloud: Synced";
+      pillTooltip = "Cloud: Synced";
+    }
   }
 
   useEffect(() => {

@@ -56,7 +56,7 @@ export class SyncRunner {
   private getDb: () => Promise<{ db: PgliteDatabase<typeof schema> }>;
   private listeners: Set<SyncStatusListener> = new Set();
   private progress: SyncProgress = {
-    status: typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "idle",
+    status: "idle",
     pending: 0,
     processed: 0,
     total: 0,
@@ -72,6 +72,10 @@ export class SyncRunner {
     this.getDb = getDb;
 
     if (typeof window !== "undefined") {
+      if (!navigator.onLine) {
+        this.progress.status = "offline";
+      }
+
       this.onlineHandler = () => {
         if (this.progress.status === "offline") {
           this.updateProgress({ status: "idle" });
@@ -134,7 +138,7 @@ export class SyncRunner {
 
   public schedule(delayMs: number = 2000): void {
     if (this.isDestroyed) return;
-    if (typeof navigator !== "undefined" && !navigator.onLine) {
+    if (typeof window !== "undefined" && !navigator.onLine) {
       this.updateProgress({ status: "offline" });
       return;
     }
