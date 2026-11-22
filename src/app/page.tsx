@@ -188,7 +188,9 @@ export default function ListPage() {
                     <Icon
                       name="chevron-right"
                       size={13}
-                      className={expanded ? "rotate-90" : ""}
+                      className={`transition-transform duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:duration-0 ${
+                        expanded ? "rotate-90" : ""
+                      }`}
                     />
                   </span>
                   <SubjectIcon subject={s.id} size={15} />

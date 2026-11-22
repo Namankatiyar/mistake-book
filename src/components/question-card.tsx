@@ -106,7 +106,7 @@ export function QuestionCard({
             onOpen(question.id);
           }
         }}
-        className={`group flex h-full flex-col justify-between rounded-[16px] border border-line/70 dark:border-white/5 bg-surface p-2 transition-all hover:border-fg/20 hover:shadow-md cursor-pointer select-none ${
+        className={`group flex h-full flex-col justify-between rounded-[16px] border border-line/70 dark:border-white/5 bg-surface p-2 transition-[transform,border-color,box-shadow] duration-120 ease-[cubic-bezier(0.23,1,0.32,1)] hover:border-fg/20 hover:shadow-md active:scale-[0.985] motion-reduce:active:scale-100 cursor-pointer select-none ${
           question.stashed ? "opacity-60" : ""
         }`}
       >

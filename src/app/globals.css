@@ -3,6 +3,7 @@
 /* ---- Hand-rolled tokens: one neutral grey scale, color only where it carries meaning ---- */
 
 :root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --bg: #fafafa;
   --surface: #ffffff;
   --line: #e5e5e5;
@@ -158,6 +159,118 @@ body {
   }
 }
 
+.modal-backdrop {
+  opacity: 0;
+  transition: opacity 180ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.modal-backdrop[data-state="open"] {
+  opacity: 1;
+}
+.modal-backdrop[data-state="closed"] {
+  opacity: 0;
+  transition-duration: 140ms;
+}
+
+.modal-dialog {
+  opacity: 0;
+  transform: scale(0.96);
+  transform-origin: center;
+  transition:
+    transform 200ms cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.modal-dialog[data-state="open"] {
+  opacity: 1;
+  transform: scale(1);
+}
+.modal-dialog[data-state="closed"] {
+  opacity: 0;
+  transform: scale(0.97);
+  transition-duration: 140ms;
+}
+
+.dropdown-menu[data-placement="bottom"] {
+  transform-origin: top;
+  animation: dropdown-in-bottom 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.dropdown-menu[data-placement="top"] {
+  transform-origin: bottom;
+  animation: dropdown-in-top 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@keyframes dropdown-in-bottom {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes dropdown-in-top {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.drag-overlay-backdrop {
+  animation: drag-backdrop-fade 140ms cubic-bezier(0.23, 1, 0.32, 1) forwards;
+}
+
+@keyframes drag-backdrop-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.drag-overlay-card {
+  animation: drag-card-enter 160ms cubic-bezier(0.23, 1, 0.32, 1) forwards;
+}
+
+@keyframes drag-card-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn:active:not(:disabled),
+  .icon-btn:active:not(:disabled) {
+    transform: none;
+  }
+
+  .modal-dialog {
+    transform: none !important;
+  }
+
+  .dropdown-menu[data-placement="bottom"],
+  .dropdown-menu[data-placement="top"] {
+    animation: mb-fade 140ms ease-out;
+    transform: none;
+  }
+
+  .drag-overlay-card {
+    animation: drag-backdrop-fade 140ms cubic-bezier(0.23, 1, 0.32, 1) forwards;
+    transform: none !important;
+  }
+}
+
 /* Tooltip arrow styling */
 .tooltip-arrow {
   pointer-events: none;
@@ -201,11 +314,16 @@ body {
     cursor: pointer;
     user-select: none;
     flex: none;
+    transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1), opacity 120ms ease, background-color 120ms ease;
   }
 
   .btn:disabled {
     opacity: 0.45;
     cursor: default;
+  }
+
+  .btn:active:not(:disabled) {
+    transform: scale(0.97);
   }
 
   .btn-sm {
@@ -264,6 +382,7 @@ body {
     color: var(--muted);
     cursor: pointer;
     flex: none;
+    transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1), background-color 120ms ease, color 120ms ease;
   }
 
   .icon-btn:hover:not(:disabled) {
@@ -279,6 +398,10 @@ body {
   .icon-btn[data-active] {
     background: var(--soft);
     color: var(--fg);
+  }
+
+  .icon-btn:active:not(:disabled) {
+    transform: scale(0.92);
   }
 
   .input {

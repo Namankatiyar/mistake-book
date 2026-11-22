@@ -2,10 +2,10 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Mistake book · JEE Mains",
+    name: "Mistake book · JEE Mains & NEET",
     short_name: "Mistake Book",
     description:
-      "A local mistake notebook for JEE Mains prep. Paste questions you got wrong, label them, and revise them fast.",
+      "A local mistake notebook for JEE Mains and NEET prep. Paste questions you got wrong, label them, and revise them fast.",
     start_url: "/",
     id: "/",
     scope: "/",

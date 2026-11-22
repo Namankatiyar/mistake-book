@@ -295,8 +295,8 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
         }}
       />
       {dragging && (
-        <div className="pointer-events-none fixed inset-0 z-[60] flex items-center justify-center border-2 border-dashed border-line bg-bg/85">
-          <div className="flex flex-col items-center gap-2 text-muted">
+        <div className="drag-overlay-backdrop pointer-events-none fixed inset-0 z-[60] flex items-center justify-center border-2 border-dashed border-line bg-bg/85">
+          <div className="drag-overlay-card flex flex-col items-center gap-2 text-muted">
             <Icon name="image" size={28} />
             <p className="text-[16px] font-medium text-fg">
               Drop images to add questions

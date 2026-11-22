@@ -72,3 +72,6 @@ ehthumbs.db
 !.vscode/extensions.json
 
 docs/
+.agents/
+.claude/
+plans/

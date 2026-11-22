@@ -414,6 +414,24 @@ export function Modal({
   children: ReactNode;
 }) {
   const mounted = useIsMounted();
+  const [rendered, setRendered] = useState(open);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setRendered(true);
+      const raf = requestAnimationFrame(() => {
+        setVisible(true);
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setVisible(false);
+      const timer = setTimeout(() => {
+        setRendered(false);
+      }, 140);
+      return () => clearTimeout(timer);
+    }
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -430,7 +448,7 @@ export function Modal({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open, onClose]);
 
-  if (!open || !mounted) return null;
+  if (!rendered || !mounted) return null;
 
   const widthClass = className.includes("max-w-")
     ? ""
@@ -440,7 +458,8 @@ export function Modal({
 
   const content = (
     <div
-      className="fixed inset-0 z-50 flex min-h-full justify-center overflow-y-auto bg-black/40 p-4"
+      data-state={visible ? "open" : "closed"}
+      className="modal-backdrop fixed inset-0 z-50 flex min-h-full justify-center overflow-y-auto bg-black/40 p-4"
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => e.stopPropagation()}
       onMouseDown={(e) => {
@@ -451,7 +470,8 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={label}
-        className={`fade-in m-auto w-full ${widthClass} rounded-[10px] border border-line bg-surface ${className}`.trim()}
+        data-state={visible ? "open" : "closed"}
+        className={`modal-dialog m-auto w-full ${widthClass} rounded-[10px] border border-line bg-surface ${className}`.trim()}
       >
         {children}
       </div>

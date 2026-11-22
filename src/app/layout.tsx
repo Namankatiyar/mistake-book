@@ -26,9 +26,9 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "Mistake book · JEE Mains",
+  title: "Mistake book · JEE Mains & NEET",
   description:
-    "A local mistake notebook for JEE Mains prep. Paste questions you got wrong, label them, and revise them fast.",
+    "A local mistake notebook for JEE Mains and NEET prep. Paste questions you got wrong, label them, and revise them fast.",
   manifest: "/manifest.webmanifest",
   applicationName: "Mistake Book",
   appleWebApp: {
@@ -38,6 +38,12 @@ export const metadata: Metadata = {
   },
   formatDetection: {
     telephone: false,
+  },
+  openGraph: {
+    title: "Mistake book · JEE Mains & NEET",
+    description:
+      "A local mistake notebook for JEE Mains and NEET prep. Paste questions you got wrong, label them, and revise them fast.",
+    type: "website",
   },
   icons: {
     icon: [

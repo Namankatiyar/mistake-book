@@ -432,7 +432,7 @@ export function SelectDropdown({
             role="listbox"
             tabIndex={-1}
             style={{ opacity: 0, pointerEvents: "none" }}
-            className={`fade-in fixed z-50 flex flex-col rounded-[8px] border border-line bg-surface text-fg shadow-lg shadow-black/8 dark:shadow-black/40 overflow-hidden ${menuClassName}`}
+            className={`dropdown-menu fixed z-50 flex flex-col rounded-[8px] border border-line bg-surface text-fg shadow-lg shadow-black/8 dark:shadow-black/40 overflow-hidden ${menuClassName}`}
             onKeyDown={handleKeyDown}
           >
             <div
@@ -847,7 +847,7 @@ export function SearchableChapterSelect({
             role="listbox"
             tabIndex={-1}
             style={{ opacity: 0, pointerEvents: "none" }}
-            className={`fade-in fixed z-50 flex flex-col rounded-[8px] border border-line bg-surface text-fg shadow-lg shadow-black/8 dark:shadow-black/40 overflow-hidden ${menuClassName}`}
+            className={`dropdown-menu fixed z-50 flex flex-col rounded-[8px] border border-line bg-surface text-fg shadow-lg shadow-black/8 dark:shadow-black/40 overflow-hidden ${menuClassName}`}
             onKeyDown={handleKeyDown}
           >
             {/* Embedded Search Header */}
