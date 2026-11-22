@@ -12,7 +12,9 @@ import {
   Kbd,
   SearchableChapterSelect,
   Select,
+  SelectDropdown,
   SubjectIcon,
+  type SelectOption,
 } from "@/components/ui";
 import { useSessionState } from "@/lib/hooks";
 import { useLibrary } from "@/lib/library";
@@ -70,6 +72,17 @@ export default function ListPage() {
     () => getSyllabus(settings.examMode),
     [settings.examMode],
   );
+
+  const subjectOptions: SelectOption[] = useMemo(() => {
+    return [
+      { value: "", label: "All subjects" },
+      ...syllabus.map((s) => ({
+        value: s.id,
+        label: s.name,
+        icon: <SubjectIcon subject={s.id} size={14} />,
+      })),
+    ];
+  }, [syllabus]);
 
   const set = (patch: Partial<ListState>) =>
     setState((prev) => ({ ...prev, ...patch }));
@@ -238,12 +251,14 @@ export default function ListPage() {
       <main className="min-w-0 flex-1">
         <div className="toolbar-container sticky top-0 z-20 border-b border-line bg-bg py-3">
           <div className="mb-2 grid grid-cols-2 gap-2 lg:hidden">
-            <Select
+            <SelectDropdown
               small
+              className="w-full"
               aria-label="Filter by subject"
               value={state.subjectId ?? ""}
-              onChange={(e) => {
-                const newSub = e.target.value || null;
+              options={subjectOptions}
+              onChange={(val) => {
+                const newSub = val || null;
                 set({
                   subjectId: newSub,
                   chapterId:
@@ -252,14 +267,7 @@ export default function ListPage() {
                       : null,
                 });
               }}
-            >
-              <option value="">All subjects</option>
-              {syllabus.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </Select>
+            />
             <SearchableChapterSelect
               small
               className="w-full"
@@ -280,6 +288,23 @@ export default function ListPage() {
             />
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <SelectDropdown
+              small
+              className="hidden lg:inline-block w-[145px]"
+              aria-label="Filter by subject"
+              value={state.subjectId ?? ""}
+              options={subjectOptions}
+              onChange={(val) => {
+                const newSub = val || null;
+                set({
+                  subjectId: newSub,
+                  chapterId:
+                    state.chapterId && newSub && isValidChapter(newSub, state.chapterId)
+                      ? state.chapterId
+                      : null,
+                });
+              }}
+            />
             <SearchableChapterSelect
               small
               className="hidden lg:inline-block w-[180px]"
