@@ -7,6 +7,7 @@ import "@fontsource/inter/600.css";
 import "./globals.css";
 import { CaptureProvider } from "@/components/capture";
 import { Header } from "@/components/header";
+import { Toaster } from "@/components/toaster";
 import { LibraryProvider } from "@/lib/library";
 import { SettingsProvider, THEME_SCRIPT } from "@/lib/settings";
 import { SyncProvider } from "@/lib/sync-context";
@@ -38,6 +39,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               </SyncProvider>
             </LibraryProvider>
           </ToastProvider>
+          <Toaster />
         </SettingsProvider>
       </body>
     </html>

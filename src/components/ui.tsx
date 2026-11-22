@@ -569,16 +569,18 @@ export function MistakeDot({ tone }: { tone: MistakeTone }) {
 export function RevisionBadge({
   count,
   tooltipSide = "top",
+  className = "",
 }: {
   count: number;
   tooltipSide?: TooltipSide;
+  className?: string;
 }) {
   const tone =
     count === 0
-      ? "badge-orange border border-orange-500/30"
+      ? "border-orange-500/90 text-orange-500 dark:text-orange-400 bg-orange-500/10"
       : count < 3
-        ? "badge-neutral border border-line"
-        : "badge-green border border-green-500/30";
+        ? "border-line text-muted bg-soft/50"
+        : "border-green-500/90 text-green-500 dark:text-green-400 bg-green-500/10";
 
   const tooltipText =
     count === 0
@@ -591,7 +593,7 @@ export function RevisionBadge({
         tabIndex={0}
         role="status"
         aria-label={tooltipText}
-        className={`badge tnum rounded-full h-[18px] px-1.5 text-[11.5px] cursor-help focus:outline-none focus-visible:ring-1 focus-visible:ring-fg/30 select-none ${tone}`}
+        className={`tnum inline-flex items-center justify-center rounded-full border px-2.5 py-0.5 text-[12px] font-bold leading-none cursor-help focus:outline-none focus-visible:ring-1 focus-visible:ring-fg/30 select-none ${tone} ${className}`}
       >
         {count}×
       </span>

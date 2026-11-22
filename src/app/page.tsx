@@ -8,13 +8,10 @@ import { QuestionCard } from "@/components/question-card";
 import {
   Button,
   Icon,
-  IconButton,
   Kbd,
   SearchableChapterSelect,
   Select,
-  SelectDropdown,
   SubjectIcon,
-  type SelectOption,
 } from "@/components/ui";
 import { useSessionState } from "@/lib/hooks";
 import { useLibrary } from "@/lib/library";
@@ -29,8 +26,6 @@ import {
 import { useSettings } from "@/lib/settings";
 import {
   getSyllabus,
-  isValidChapter,
-  subjectById,
   subjectOfChapter,
 } from "@/lib/syllabus";
 
@@ -62,7 +57,7 @@ const STASH_MODES: { id: StashMode; label: string }[] = [
 
 export default function ListPage() {
   const { ready, questions, sources } = useLibrary();
-  const { settings, update } = useSettings();
+  const { settings } = useSettings();
   const { openModal, openPicker } = useCapture();
   const handleAddQuestions = openModal || openPicker;
   const router = useRouter();
@@ -72,17 +67,6 @@ export default function ListPage() {
     () => getSyllabus(settings.examMode),
     [settings.examMode],
   );
-
-  const subjectOptions: SelectOption[] = useMemo(() => {
-    return [
-      { value: "", label: "All subjects" },
-      ...syllabus.map((s) => ({
-        value: s.id,
-        label: s.name,
-        icon: <SubjectIcon subject={s.id} size={14} />,
-      })),
-    ];
-  }, [syllabus]);
 
   const set = (patch: Partial<ListState>) =>
     setState((prev) => ({ ...prev, ...patch }));
@@ -250,24 +234,7 @@ export default function ListPage() {
       {/* Question column */}
       <main className="min-w-0 flex-1">
         <div className="toolbar-container sticky top-0 z-20 border-b border-line bg-bg py-3">
-          <div className="mb-2 grid grid-cols-2 gap-2 lg:hidden">
-            <SelectDropdown
-              small
-              className="w-full"
-              aria-label="Filter by subject"
-              value={state.subjectId ?? ""}
-              options={subjectOptions}
-              onChange={(val) => {
-                const newSub = val || null;
-                set({
-                  subjectId: newSub,
-                  chapterId:
-                    state.chapterId && newSub && isValidChapter(newSub, state.chapterId)
-                      ? state.chapterId
-                      : null,
-                });
-              }}
-            />
+          <div className="mb-2 lg:hidden">
             <SearchableChapterSelect
               small
               className="w-full"
@@ -288,23 +255,6 @@ export default function ListPage() {
             />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <SelectDropdown
-              small
-              className="hidden lg:inline-block w-[145px]"
-              aria-label="Filter by subject"
-              value={state.subjectId ?? ""}
-              options={subjectOptions}
-              onChange={(val) => {
-                const newSub = val || null;
-                set({
-                  subjectId: newSub,
-                  chapterId:
-                    state.chapterId && newSub && isValidChapter(newSub, state.chapterId)
-                      ? state.chapterId
-                      : null,
-                });
-              }}
-            />
             <SearchableChapterSelect
               small
               className="hidden lg:inline-block w-[180px]"
@@ -392,17 +342,6 @@ export default function ListPage() {
                 <Icon name="plus" size={14} />
                 Add questions
               </Button>
-              <IconButton
-                className="toolbar-actions-eye"
-                name={settings.showAnswers ? "eye-off" : "eye"}
-                label={
-                  settings.showAnswers
-                    ? "Hide answers and notes in list"
-                    : "Show answers and notes in list"
-                }
-                active={settings.showAnswers}
-                onClick={() => update({ showAnswers: !settings.showAnswers })}
-              />
             </div>
           </div>
         </div>

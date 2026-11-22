@@ -512,7 +512,7 @@ body {
     display: flex;
     width: 100%;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 0.375rem;
   }
 
@@ -521,10 +521,6 @@ body {
       width: auto;
       margin-left: auto;
       justify-content: flex-start;
-    }
-
-    .toolbar-actions-eye {
-      order: -1;
     }
   }
 }

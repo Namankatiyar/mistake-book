@@ -39,6 +39,9 @@ type LibraryContextValue = {
   addQuestion: (input: NewQuestion) => Promise<Question | null>;
   updateQuestion: (id: string, patch: Partial<Question>) => Promise<void>;
   deleteQuestion: (id: string) => Promise<void>;
+  stageDelete: (id: string) => void;
+  cancelDelete: (id: string) => void;
+  commitDelete: (id: string) => Promise<void>;
   resetRevisions: (id: string) => Promise<void>;
   /** Counts one revision, at most once per local day. */
   countRevision: (id: string) => Promise<void>;
@@ -52,11 +55,31 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set());
   const questionsRef = useRef<Question[]>(questions);
   questionsRef.current = questions;
+  const pendingDeleteIdsRef = useRef<Set<string>>(pendingDeleteIds);
+  pendingDeleteIdsRef.current = pendingDeleteIds;
   const sourcesRef = useRef<Source[]>(sources);
   sourcesRef.current = sources;
   const { push } = useToast();
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      for (const id of pendingDeleteIdsRef.current) {
+        void removeQuestion(id);
+        void enqueueSyncItem("question", id, "delete");
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      for (const id of pendingDeleteIdsRef.current) {
+        void removeQuestion(id);
+        void enqueueSyncItem("question", id, "delete");
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -139,7 +162,23 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     [push],
   );
 
-  const deleteQuestion = useCallback(
+  const stageDelete = useCallback((id: string) => {
+    setPendingDeleteIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
+
+  const cancelDelete = useCallback((id: string) => {
+    setPendingDeleteIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const commitDelete = useCallback(
     async (id: string) => {
       try {
         await removeQuestion(id);
@@ -147,10 +186,23 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       } catch {
         push("Couldn't delete question");
         return;
+      } finally {
+        setQuestions((prev) => prev.filter((q) => q.id !== id));
+        setPendingDeleteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
       }
-      setQuestions((prev) => prev.filter((q) => q.id !== id));
     },
     [push],
+  );
+
+  const deleteQuestion = useCallback(
+    async (id: string) => {
+      await commitDelete(id);
+    },
+    [commitDelete],
   );
 
   const resetRevisions = useCallback(
@@ -235,14 +287,22 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     [push],
   );
 
+  const visibleQuestions = useMemo(() => {
+    if (pendingDeleteIds.size === 0) return questions;
+    return questions.filter((q) => !pendingDeleteIds.has(q.id));
+  }, [questions, pendingDeleteIds]);
+
   const value = useMemo(
     () => ({
       ready,
-      questions,
+      questions: visibleQuestions,
       sources,
       addQuestion,
       updateQuestion,
       deleteQuestion,
+      stageDelete,
+      cancelDelete,
+      commitDelete,
       resetRevisions,
       countRevision,
       addSource,
@@ -250,11 +310,14 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     }),
     [
       ready,
-      questions,
+      visibleQuestions,
       sources,
       addQuestion,
       updateQuestion,
       deleteQuestion,
+      stageDelete,
+      cancelDelete,
+      commitDelete,
       resetRevisions,
       countRevision,
       addSource,
