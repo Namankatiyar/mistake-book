@@ -206,6 +206,10 @@ export default function ListPage() {
             );
           })}
         </div>
+        <div className="mt-6 rounded-[8px] border border-line bg-surface/50 p-3 text-[12px] leading-relaxed text-muted">
+          You can directly drag and drop images onto here or press{" "}
+          <Kbd>Ctrl + V</Kbd> to add mistakes
+        </div>
       </aside>
 
       {/* Question column */}
