@@ -106,17 +106,22 @@ export function QuestionCard({
             onOpen(question.id);
           }
         }}
-        className={`group flex h-full flex-col justify-between rounded-[20px] border border-line/70 dark:border-white/5 bg-surface p-3.5 transition-all hover:border-fg/20 hover:shadow-md cursor-pointer select-none ${
+        className={`group flex h-full flex-col justify-between rounded-[16px] border border-line/70 dark:border-white/5 bg-surface p-2 transition-all hover:border-fg/20 hover:shadow-md cursor-pointer select-none ${
           question.stashed ? "opacity-60" : ""
         }`}
       >
         <div>
           {/* Top: Question Preview or Stylized Skeleton */}
-          <div className="relative flex aspect-[16/10.5] w-full overflow-hidden rounded-[14px] bg-[#eae7df] dark:bg-[#1a1a1a] border border-black/5 dark:border-white/5">
+          <div className="relative flex aspect-[16/10.5] w-full overflow-hidden rounded-[10px] bg-[#eae7df] dark:bg-[#1a1a1a] border border-black/5 dark:border-white/5">
+            {/* Revision counting badge: smaller, top right corner over question thumbnail */}
+            <div className="absolute top-1.5 right-1.5 z-10">
+              <RevisionBadge count={question.revisionCount} size="sm" />
+            </div>
+
             {url ? (
               <>
                 {source && (
-                  <span className="absolute top-2.5 left-2.5 z-10 rounded-[6px] bg-[#1e1e1e]/90 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-white shadow-sm backdrop-blur-xs select-none">
+                  <span className="absolute top-1.5 left-1.5 z-10 rounded-[5px] bg-[#1e1e1e]/90 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white shadow-xs backdrop-blur-xs select-none">
                     {source.name}
                   </span>
                 )}
@@ -124,55 +129,52 @@ export function QuestionCard({
                 <img
                   src={url}
                   alt={`Question — ${chapter?.name ?? "chapter"}`}
-                  className="h-full w-full object-contain p-2"
+                  className="h-full w-full object-contain p-1.5"
                   loading="lazy"
                 />
               </>
             ) : (
-              <div className="flex h-full w-full flex-col justify-between bg-[#eae7df] p-3 text-neutral-800 select-none">
+              <div className="flex h-full w-full flex-col justify-between bg-[#eae7df] p-2.5 text-neutral-800 select-none">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="rounded-[6px] bg-[#1f1f1f]/90 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-white shadow-sm">
+                    <span className="rounded-[5px] bg-[#1f1f1f]/90 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white shadow-xs">
                       {source?.name ?? "PYQ"}
                     </span>
-                    <div className="h-1.5 flex-1 rounded-full bg-[#ccc8bd]/90" />
+                    <div className="h-1 flex-1 rounded-full bg-[#ccc8bd]/90" />
                   </div>
-                  <div className="mt-2.5 space-y-1.5">
-                    <div className="h-1.5 w-[85%] rounded-full bg-[#ccc8bd]/90" />
-                    <div className="h-1.5 w-[75%] rounded-full bg-[#ccc8bd]/90" />
-                    <div className="h-1.5 w-[50%] rounded-full bg-[#ccc8bd]/90" />
+                  <div className="mt-2 space-y-1">
+                    <div className="h-1 w-[85%] rounded-full bg-[#ccc8bd]/90" />
+                    <div className="h-1 w-[75%] rounded-full bg-[#ccc8bd]/90" />
+                    <div className="h-1 w-[50%] rounded-full bg-[#ccc8bd]/90" />
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 pt-2">
-                  <div className="h-1.5 w-6 rounded-full bg-[#ccc8bd]/90" />
-                  <div className="h-1.5 w-6 rounded-full bg-[#ccc8bd]/90" />
-                  <div className="h-1.5 w-6 rounded-full bg-[#ccc8bd]/90" />
-                  <div className="h-1.5 w-6 rounded-full bg-[#ccc8bd]/90" />
+                <div className="flex items-center gap-1.5 pt-1">
+                  <div className="h-1 w-5 rounded-full bg-[#ccc8bd]/90" />
+                  <div className="h-1 w-5 rounded-full bg-[#ccc8bd]/90" />
+                  <div className="h-1 w-5 rounded-full bg-[#ccc8bd]/90" />
+                  <div className="h-1 w-5 rounded-full bg-[#ccc8bd]/90" />
                 </div>
               </div>
             )}
           </div>
 
-          {/* Middle Row: Chapter Name, Revision Pill, Actions */}
-          <div className="mt-3.5 flex items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <h3 className="truncate text-[17px] font-bold tracking-tight text-fg leading-none">
-                {chapter?.name ?? "Unknown Chapter"}
-              </h3>
-              <RevisionBadge count={question.revisionCount} />
-            </div>
+          {/* Middle Row: Chapter Name (text-xs), Actions */}
+          <div className="mt-2 flex items-center justify-between gap-1.5">
+            <h3 className="truncate text-xs font-semibold tracking-tight text-fg leading-none">
+              {chapter?.name ?? "Unknown Chapter"}
+            </h3>
 
             <div
-              className="flex items-center gap-1.5 shrink-0"
+              className="flex items-center gap-1 shrink-0"
               onClick={(e) => e.stopPropagation()}
             >
               <IconButton
                 name="pencil"
                 label="Edit tags"
                 tooltipSide="top"
-                size={17}
-                className="!h-8 !w-8 text-neutral-400 hover:text-fg hover:bg-soft rounded-[8px]"
+                size={12}
+                className="!h-6 !w-6 text-neutral-400 hover:text-fg hover:bg-soft rounded-[5px]"
                 onClick={(e) => {
                   e.stopPropagation();
                   setEditing(true);
@@ -182,23 +184,23 @@ export function QuestionCard({
                 <button
                   type="button"
                   aria-label="Delete question"
-                  className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-neutral-800/80 dark:bg-[#252525] border border-line/60 dark:border-white/5 text-neutral-300 dark:text-neutral-300 transition-all hover:bg-red-500/15 hover:border-red-500/30 hover:text-red-400 active:scale-95 cursor-pointer"
+                  className="flex h-6 w-6 items-center justify-center rounded-[5px] bg-neutral-800/80 dark:bg-[#252525] border border-line/60 dark:border-white/5 text-neutral-300 dark:text-neutral-300 transition-all hover:bg-red-500/15 hover:border-red-500/30 hover:text-red-400 active:scale-95 cursor-pointer"
                   onClick={(e) => {
                     e.stopPropagation();
                     handleDelete();
                   }}
                 >
-                  <Icon name="trash" size={17} />
+                  <Icon name="trash" size={12} />
                 </button>
               </Tooltip>
             </div>
           </div>
 
-          {/* Bottom Row: Mistake Reason */}
+          {/* Bottom Row: Mistake Reason (with thin horizontal separator above) */}
           {mistake && (
-            <div className="mt-2.5 flex items-center gap-2 min-w-0">
+            <div className="mt-2 border-t border-line/70 dark:border-white/10 pt-2 flex items-center gap-1.5 min-w-0 px-1">
               <span
-                className="h-2.5 w-2.5 rounded-full shrink-0"
+                className="h-1.5 w-1.5 rounded-full shrink-0"
                 style={{
                   backgroundColor:
                     mistake.tone === "red"
@@ -209,7 +211,7 @@ export function QuestionCard({
                 }}
                 aria-hidden="true"
               />
-              <span className="truncate text-[13.5px] font-normal text-muted dark:text-neutral-400">
+              <span className="truncate text-xs font-normal text-muted dark:text-neutral-400">
                 {mistake.label}
               </span>
             </div>
@@ -219,7 +221,7 @@ export function QuestionCard({
         {/* Answer & note preview when global setting is active */}
         {settings.showAnswers && (question.answerKey || question.note) && (
           <div
-            className="fade-in mt-2 space-y-0.5 rounded-[8px] border border-line/60 bg-soft/40 px-2.5 py-1.5 text-[12px]"
+            className="fade-in mt-1.5 space-y-0.5 rounded-[6px] border border-line/60 bg-soft/40 px-2 py-1 text-xs"
             onClick={(e) => e.stopPropagation()}
           >
             {question.answerKey && (

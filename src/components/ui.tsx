@@ -570,22 +570,29 @@ export function RevisionBadge({
   count,
   tooltipSide = "top",
   className = "",
+  size = "md",
 }: {
   count: number;
   tooltipSide?: TooltipSide;
   className?: string;
+  size?: "sm" | "md";
 }) {
   const tone =
     count === 0
-      ? "border-orange-500/90 text-orange-500 dark:text-orange-400 bg-orange-500/10"
+      ? "border-orange-500/90 text-orange-500 dark:text-orange-400 bg-surface/90 dark:bg-[#1c1c1c]/90"
       : count < 3
-        ? "border-line text-muted bg-soft/50"
-        : "border-green-500/90 text-green-500 dark:text-green-400 bg-green-500/10";
+        ? "border-line text-muted bg-surface/90 dark:bg-[#1c1c1c]/90"
+        : "border-green-500/90 text-green-500 dark:text-green-400 bg-surface/90 dark:bg-[#1c1c1c]/90";
 
   const tooltipText =
     count === 0
       ? "Not revised yet"
       : `Revised ${count} time${count === 1 ? "" : "s"}`;
+
+  const sizeClass =
+    size === "sm"
+      ? "px-1.5 py-0.5 text-[10px]"
+      : "px-2.5 py-0.5 text-[12px]";
 
   return (
     <Tooltip content={tooltipText} side={tooltipSide} asChild>
@@ -593,7 +600,7 @@ export function RevisionBadge({
         tabIndex={0}
         role="status"
         aria-label={tooltipText}
-        className={`tnum inline-flex items-center justify-center rounded-full border px-2.5 py-0.5 text-[12px] font-bold leading-none cursor-help focus:outline-none focus-visible:ring-1 focus-visible:ring-fg/30 select-none ${tone} ${className}`}
+        className={`tnum inline-flex items-center justify-center rounded-full border ${sizeClass} font-bold leading-none cursor-help focus:outline-none focus-visible:ring-1 focus-visible:ring-fg/30 select-none backdrop-blur-xs shadow-xs ${tone} ${className}`}
       >
         {count}×
       </span>
