@@ -44,7 +44,7 @@ export default function TermsPage() {
         </h2>
         <div className="mt-3 space-y-3 text-muted">
           <p>
-            Welcome to <strong className="text-fg">Mistake Book</strong>. By accessing, browsing, or using this application,
+            Welcome to <strong className="text-fg">Mistake Book</strong>, accessible at <strong className="text-fg">https://mistake.ojeet.tech</strong>. By accessing, browsing, or using this application,
             you acknowledge that you have read, understood, and agree to be bound by these Terms of Service
             and our accompanying{" "}
             <Link href="/privacy" className="text-fg underline hover:text-muted">
@@ -205,7 +205,7 @@ export default function TermsPage() {
       {/* 9. Modifications */}
       <section id="modifications" className="scroll-mt-20">
         <h2 className="text-[20px] font-semibold text-fg">
-          9. Modifications &amp; Termination
+          9. Modifications, Termination &amp; Contact
         </h2>
         <div className="mt-3 space-y-3 text-muted">
           <p>
@@ -214,7 +214,11 @@ export default function TermsPage() {
             of revisions signifies your acceptance of the updated terms.
           </p>
           <p>
-            For any questions regarding these terms, please consult our{" "}
+            For any questions, legal notices, or inquiries regarding these terms, please contact us at{" "}
+            <a href="mailto:support@ojeet.tech" className="text-fg underline hover:text-muted">
+              support@ojeet.tech
+            </a>{" "}
+            or review our accompanying{" "}
             <Link href="/privacy" className="text-fg underline hover:text-muted">
               Privacy Policy
             </Link>.

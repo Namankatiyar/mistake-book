@@ -117,6 +117,12 @@ export function LegalShell({
                 <strong className="text-fg font-medium">Anonymous Analytics:</strong> Vercel Analytics tracks aggregate metrics only; never personal files or questions.
               </span>
             </li>
+            <li className="flex items-start gap-1.5">
+              <ShieldCheck className="h-3.5 w-3.5 text-muted shrink-0 mt-0.5" />
+              <span>
+                <strong className="text-fg font-medium">Google Limited Use:</strong> Strict compliance with Google API Services User Data Policy.
+              </span>
+            </li>
           </ul>
         </div>
       </aside>
