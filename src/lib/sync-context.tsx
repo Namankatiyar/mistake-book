@@ -17,6 +17,8 @@ import {
   type SyncProgress,
   type SyncStatus,
 } from "@/lib/sync-engine";
+import { clearFolderCache } from "@/lib/drive-api";
+import * as schema from "@/db/schema";
 
 export type AuthUser = {
   email: string;
@@ -32,6 +34,7 @@ export type AuthStatus = {
 export type SyncContextValue = {
   syncProgress: SyncProgress;
   syncNow: () => Promise<void>;
+  mergeWithCloud: () => Promise<void>;
   restoreFromDrive: () => Promise<void>;
   authStatus: AuthStatus;
   connectDrive: () => void;
@@ -55,6 +58,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const [syncProgress, setSyncProgress] = useState<SyncProgress>(DEFAULT_SYNC_PROGRESS);
 
   const runnerRef = useRef<SyncRunner | null>(null);
+  const hasMergedOnConnectRef = useRef(false);
 
   // Check if offline on initial client mount
   useEffect(() => {
@@ -94,7 +98,12 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
     fetchAuthStatus().then((auth) => {
       if (auth.connected) {
-        runner.schedule(1000);
+        if (!hasMergedOnConnectRef.current) {
+          hasMergedOnConnectRef.current = true;
+          runner.mergeWithCloud().catch(() => {});
+        } else {
+          runner.schedule(1000);
+        }
       }
     });
 
@@ -110,22 +119,26 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     if (typeof window === "undefined") return;
 
     const url = new URL(window.location.href);
-    if (url.searchParams.get("sync") === "connected") {
+    const isSyncRedirect = url.searchParams.get("sync") === "connected";
+    if (isSyncRedirect) {
       url.searchParams.delete("sync");
       window.history.replaceState(
         {},
         "",
         url.pathname + (url.search ? url.search : "")
       );
+    }
 
-      fetchAuthStatus().then((auth) => {
-        if (auth.connected && runnerRef.current) {
+    fetchAuthStatus().then((auth) => {
+      if (auth.connected && runnerRef.current) {
+        if (isSyncRedirect || !hasMergedOnConnectRef.current) {
+          hasMergedOnConnectRef.current = true;
+          runnerRef.current.mergeWithCloud().catch(() => {});
+        } else {
           runnerRef.current.schedule(500);
         }
-      });
-    } else {
-      fetchAuthStatus();
-    }
+      }
+    });
   }, [fetchAuthStatus]);
 
   // Listen to online and offline window events
@@ -159,6 +172,12 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const mergeWithCloud = useCallback(async () => {
+    if (runnerRef.current) {
+      await runnerRef.current.mergeWithCloud();
+    }
+  }, []);
+
   const restoreFromDrive = useCallback(async () => {
     if (runnerRef.current) {
       await runnerRef.current.restoreFromDrive();
@@ -179,6 +198,14 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     } catch {
       // ignore
     }
+    try {
+      const { db } = await getDb();
+      await db.delete(schema.syncMetadata);
+      clearFolderCache();
+    } catch {
+      // ignore
+    }
+    hasMergedOnConnectRef.current = false;
     setAuthStatus({ connected: false });
     setSyncProgress((prev) => ({ ...prev, status: "unauthenticated" as SyncStatus }));
   }, []);
@@ -187,12 +214,13 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     () => ({
       syncProgress,
       syncNow,
+      mergeWithCloud,
       restoreFromDrive,
       authStatus,
       connectDrive,
       disconnectDrive,
     }),
-    [syncProgress, syncNow, restoreFromDrive, authStatus, connectDrive, disconnectDrive]
+    [syncProgress, syncNow, mergeWithCloud, restoreFromDrive, authStatus, connectDrive, disconnectDrive]
   );
 
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;

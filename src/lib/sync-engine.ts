@@ -1,7 +1,8 @@
 import type { PgliteDatabase } from "drizzle-orm/pglite";
 import * as schema from "@/db/schema";
-import { eq, asc, isNotNull } from "drizzle-orm";
+import { eq, asc, isNotNull, and, or, isNull } from "drizzle-orm";
 import { subjectById, chapterById } from "@/lib/syllabus";
+import { newId } from "./model";
 import {
   findOrCreateFolder,
   resolveChapterFolder,
@@ -13,6 +14,8 @@ import {
   computeBytesHash,
   formatQuestionFileName,
   type ManifestData,
+  type ManifestQuestion,
+  type ManifestSource,
 } from "./drive-api";
 
 export type SyncStatus = "idle" | "syncing" | "error" | "offline" | "unauthenticated";
@@ -50,6 +53,86 @@ async function processWithRateLimit<T>(
   });
 
   await Promise.all(workers);
+}
+
+/**
+ * Scans local questions and sources for any active items where syncedAt IS NULL
+ * or driveFileId IS NULL, and enqueues them to sync_queue if not already pending/queued.
+ */
+export async function ensureUnsyncedEnqueued(
+  db: PgliteDatabase<typeof schema>
+): Promise<void> {
+  const existingQueue = await db
+    .select({
+      entityType: schema.syncQueue.entityType,
+      entityId: schema.syncQueue.entityId,
+    })
+    .from(schema.syncQueue);
+
+  const queuedQuestionIds = new Set(
+    existingQueue
+      .filter((item) => item.entityType === "question")
+      .map((item) => item.entityId)
+  );
+
+  const queuedSourceIds = new Set(
+    existingQueue
+      .filter((item) => item.entityType === "source")
+      .map((item) => item.entityId)
+  );
+
+  // 1. Scan active questions where syncedAt IS NULL or driveFileId IS NULL
+  const unsyncedQuestions = await db
+    .select({ id: schema.questions.id })
+    .from(schema.questions)
+    .where(
+      and(
+        eq(schema.questions.isDeleted, false),
+        or(isNull(schema.questions.syncedAt), isNull(schema.questions.driveFileId))
+      )
+    );
+
+  const now = Date.now();
+  for (const q of unsyncedQuestions) {
+    if (!queuedQuestionIds.has(q.id)) {
+      await db.insert(schema.syncQueue).values({
+        id: newId(),
+        entityType: "question",
+        entityId: q.id,
+        action: "upsert",
+        createdAt: now,
+        attempts: 0,
+        status: "pending",
+      });
+      queuedQuestionIds.add(q.id);
+    }
+  }
+
+  // 2. Scan active sources where syncedAt IS NULL
+  const unsyncedSources = await db
+    .select({ id: schema.sources.id })
+    .from(schema.sources)
+    .where(
+      and(
+        eq(schema.sources.isDeleted, false),
+        isNull(schema.sources.syncedAt)
+      )
+    );
+
+  for (const s of unsyncedSources) {
+    if (!queuedSourceIds.has(s.id)) {
+      await db.insert(schema.syncQueue).values({
+        id: newId(),
+        entityType: "source",
+        entityId: s.id,
+        action: "upsert",
+        createdAt: now,
+        attempts: 0,
+        status: "pending",
+      });
+      queuedSourceIds.add(s.id);
+    }
+  }
 }
 
 export class SyncRunner {
@@ -102,6 +185,7 @@ export class SyncRunner {
       this.getDb()
         .then(async ({ db }) => {
           try {
+            await ensureUnsyncedEnqueued(db);
             const rows = await db
               .select()
               .from(schema.syncMetadata)
@@ -154,12 +238,54 @@ export class SyncRunner {
   }
 
   public async syncNow(): Promise<void> {
+    return this.mergeWithCloud();
+  }
+
+  public async mergeWithCloud(): Promise<void> {
     if (this.isDestroyed) return;
     if (this.syncPromise) {
       return this.syncPromise;
     }
 
-    this.syncPromise = this.runSync().finally(() => {
+    this.syncPromise = this.runMergeWithCloud().finally(() => {
+      this.syncPromise = null;
+    });
+
+    return this.syncPromise;
+  }
+
+  public async runSync(): Promise<void> {
+    if (this.isDestroyed) return;
+    if (this.syncPromise) {
+      return this.syncPromise;
+    }
+
+    this.syncPromise = (async () => {
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        this.updateProgress({ status: "offline" });
+        return;
+      }
+
+      const { db } = await this.getDb();
+      let accessToken: string | null = null;
+      try {
+        accessToken = await this.fetchAccessToken();
+      } catch (err) {
+        this.updateProgress({
+          status: "error",
+          lastError: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+
+      if (!accessToken) {
+        this.updateProgress({ status: "unauthenticated" });
+        return;
+      }
+
+      const rootFolderId = await this.getRootFolderId(db, accessToken);
+      await this.runSyncInternal(db, accessToken, rootFolderId);
+    })().finally(() => {
       this.syncPromise = null;
     });
 
@@ -432,7 +558,109 @@ export class SyncRunner {
     return rootId;
   }
 
-  private async runSync(): Promise<void> {
+  private async uploadUnifiedManifest(
+    db: PgliteDatabase<typeof schema>,
+    accessToken: string,
+    rootFolderId: string
+  ): Promise<number> {
+    const allSources = await db.select().from(schema.sources);
+    const syncedQuestions = await db
+      .select()
+      .from(schema.questions)
+      .where(isNotNull(schema.questions.driveFileId));
+
+    const manifestQuestions: ManifestQuestion[] = await Promise.all(
+      syncedQuestions.map(async (q) => {
+        const subjectName = subjectById(q.subjectId)?.name ?? q.subjectId;
+        const chapterName = chapterById(q.chapterId)?.name ?? q.chapterId;
+        const fileName = formatQuestionFileName(q);
+        const imageHash =
+          q.image && q.image.byteLength > 0
+            ? await computeBytesHash(q.image)
+            : "";
+        return {
+          id: q.id,
+          driveFileId: q.driveFileId!,
+          driveFilePath: `${subjectName}/${chapterName}/${fileName}`,
+          imageHash,
+          subjectId: q.subjectId,
+          chapterId: q.chapterId,
+          mistakeId: q.mistakeId,
+          sourceId: q.sourceId,
+          answerKey: q.answerKey,
+          note: q.note,
+          revisionCount: q.revisionCount,
+          lastRevisionDay: q.lastRevisionDay,
+          stashed: Boolean(q.stashed),
+          createdAt: Number(q.createdAt),
+          updatedAt: Number(q.updatedAt ?? q.createdAt),
+          isDeleted: Boolean(q.isDeleted),
+        };
+      })
+    );
+
+    const manifestSources: ManifestSource[] = allSources.map((s) => ({
+      id: s.id,
+      name: s.name,
+      createdAt: Number(s.createdAt),
+      updatedAt: Number(s.updatedAt ?? s.createdAt),
+      isDeleted: Boolean(s.isDeleted),
+    }));
+
+    const nowTimestamp = Date.now();
+    const manifest: ManifestData = {
+      version: 1,
+      lastSyncedAt: nowTimestamp,
+      sources: manifestSources,
+      questions: manifestQuestions,
+    };
+
+    const cachedManifest = await db
+      .select()
+      .from(schema.syncMetadata)
+      .where(eq(schema.syncMetadata.key, "manifest_file_id"));
+    const existingManifestId = cachedManifest[0]?.value;
+
+    const manifestFileId = await uploadManifest(
+      accessToken,
+      manifest,
+      rootFolderId,
+      existingManifestId
+    );
+
+    await db
+      .insert(schema.syncMetadata)
+      .values({
+        key: "manifest_file_id",
+        value: manifestFileId,
+        updatedAt: nowTimestamp,
+      })
+      .onConflictDoUpdate({
+        target: schema.syncMetadata.key,
+        set: { value: manifestFileId, updatedAt: nowTimestamp },
+      });
+
+    await db
+      .insert(schema.syncMetadata)
+      .values({
+        key: "last_synced_at",
+        value: String(nowTimestamp),
+        updatedAt: nowTimestamp,
+      })
+      .onConflictDoUpdate({
+        target: schema.syncMetadata.key,
+        set: { value: String(nowTimestamp), updatedAt: nowTimestamp },
+      });
+
+    await db
+      .update(schema.sources)
+      .set({ syncedAt: nowTimestamp })
+      .where(isNull(schema.sources.syncedAt));
+
+    return nowTimestamp;
+  }
+
+  private async runMergeWithCloud(): Promise<void> {
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       this.updateProgress({ status: "offline" });
       return;
@@ -455,6 +683,348 @@ export class SyncRunner {
       this.updateProgress({ status: "unauthenticated" });
       return;
     }
+
+    this.updateProgress({ status: "syncing" });
+
+    try {
+      const rootFolderId = await this.getRootFolderId(db, accessToken);
+      const remoteManifest = await getManifest(accessToken, rootFolderId);
+
+      // 1. If remote manifest does not exist:
+      if (!remoteManifest) {
+        await ensureUnsyncedEnqueued(db);
+        await this.runSyncInternal(db, accessToken, rootFolderId);
+        const checkManifest = await getManifest(accessToken, rootFolderId);
+        if (!checkManifest) {
+          await this.uploadUnifiedManifest(db, accessToken, rootFolderId);
+        }
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("mb:library-reload"));
+        }
+        return;
+      }
+
+      // 2. If remote manifest DOES exist:
+      // --- Sources Merge ---
+      const localSources = await db.select().from(schema.sources);
+      const localSourceMap = new Map(localSources.map((s) => [s.id, s]));
+
+      for (const remoteS of remoteManifest.sources) {
+        const localS = localSourceMap.get(remoteS.id);
+        if (!localS) {
+          // Remote sources missing locally -> insert into local DB
+          await db.insert(schema.sources).values({
+            id: remoteS.id,
+            name: remoteS.name,
+            createdAt: remoteS.createdAt,
+            updatedAt: remoteS.updatedAt,
+            syncedAt: remoteS.updatedAt,
+            isDeleted: remoteS.isDeleted,
+          });
+        } else {
+          // Sources existing in both -> Last-Write-Wins (LWW) based on updatedAt
+          const localUpdated = Number(localS.updatedAt ?? localS.createdAt);
+          const remoteUpdated = Number(remoteS.updatedAt);
+          if (remoteUpdated > localUpdated) {
+            await db
+              .update(schema.sources)
+              .set({
+                name: remoteS.name,
+                createdAt: remoteS.createdAt,
+                updatedAt: remoteS.updatedAt,
+                syncedAt: remoteS.updatedAt,
+                isDeleted: remoteS.isDeleted,
+              })
+              .where(eq(schema.sources.id, remoteS.id));
+          } else if (localUpdated === remoteUpdated) {
+            if (localS.syncedAt == null) {
+              await db
+                .update(schema.sources)
+                .set({ syncedAt: remoteS.updatedAt })
+                .where(eq(schema.sources.id, remoteS.id));
+            }
+          }
+          // If localUpdated > remoteUpdated: keep local in DB
+        }
+      }
+
+      // Valid source IDs to guard foreign keys
+      const currentSources = await db.select({ id: schema.sources.id }).from(schema.sources);
+      const validSourceIds = new Set(currentSources.map((s) => s.id));
+
+      // --- Questions Merge ---
+      const localQuestions = await db.select().from(schema.questions);
+      const localQuestionMap = new Map(localQuestions.map((q) => [q.id, q]));
+      const remoteQuestionMap = new Map(remoteManifest.questions.map((q) => [q.id, q]));
+
+      // Existing queue items to avoid duplicating
+      const existingQueue = await db
+        .select({ entityType: schema.syncQueue.entityType, entityId: schema.syncQueue.entityId })
+        .from(schema.syncQueue);
+      const queuedQuestionIds = new Set(
+        existingQueue.filter((i) => i.entityType === "question").map((i) => i.entityId)
+      );
+
+      const downloadTasks: Array<{
+        remoteQ: ManifestQuestion;
+        mode: "insert" | "update";
+      }> = [];
+
+      for (const remoteQ of remoteManifest.questions) {
+        const localQ = localQuestionMap.get(remoteQ.id);
+        const sId = remoteQ.sourceId && validSourceIds.has(remoteQ.sourceId) ? remoteQ.sourceId : null;
+
+        if (!localQ) {
+          // Remote question missing locally
+          if (remoteQ.isDeleted) {
+            await db.insert(schema.questions).values({
+              id: remoteQ.id,
+              image: new Uint8Array(0),
+              createdAt: remoteQ.createdAt,
+              updatedAt: remoteQ.updatedAt,
+              syncedAt: remoteQ.updatedAt,
+              subjectId: remoteQ.subjectId,
+              chapterId: remoteQ.chapterId,
+              mistakeId: remoteQ.mistakeId,
+              sourceId: sId,
+              answerKey: remoteQ.answerKey,
+              note: remoteQ.note,
+              revisionCount: remoteQ.revisionCount,
+              lastRevisionDay: remoteQ.lastRevisionDay,
+              stashed: remoteQ.stashed,
+              driveFileId: remoteQ.driveFileId,
+              isDeleted: true,
+            });
+          } else {
+            downloadTasks.push({ remoteQ, mode: "insert" });
+          }
+        } else {
+          // Questions existing in both
+          const localUpdated = Number(localQ.updatedAt ?? localQ.createdAt);
+          const remoteUpdated = Number(remoteQ.updatedAt);
+
+          if (localUpdated > remoteUpdated) {
+            // Local is newer -> keep local in DB, mark/enqueue for upload and manifest update
+            if (!localQ.driveFileId) {
+              await db
+                .update(schema.questions)
+                .set({ driveFileId: remoteQ.driveFileId })
+                .where(eq(schema.questions.id, localQ.id));
+            }
+            if (!queuedQuestionIds.has(localQ.id)) {
+              await db.insert(schema.syncQueue).values({
+                id: newId(),
+                entityType: "question",
+                entityId: localQ.id,
+                action: localQ.isDeleted ? "delete" : "upsert",
+                createdAt: Date.now(),
+                attempts: 0,
+                status: "pending",
+              });
+              queuedQuestionIds.add(localQ.id);
+            }
+          } else if (remoteUpdated > localUpdated) {
+            // Remote is newer -> update local DB with remote metadata
+            // and if image hash differs or local image is missing, download remote image
+            if (remoteQ.isDeleted) {
+              await db
+                .update(schema.questions)
+                .set({
+                  isDeleted: true,
+                  updatedAt: remoteQ.updatedAt,
+                  syncedAt: remoteQ.updatedAt,
+                  driveFileId: remoteQ.driveFileId,
+                })
+                .where(eq(schema.questions.id, localQ.id));
+
+              await db
+                .delete(schema.syncQueue)
+                .where(
+                  and(
+                    eq(schema.syncQueue.entityType, "question"),
+                    eq(schema.syncQueue.entityId, localQ.id)
+                  )
+                );
+            } else {
+              let localHash = "";
+              if (localQ.image && localQ.image.byteLength > 0) {
+                localHash = await computeBytesHash(localQ.image);
+              }
+              const needDownload = !localHash || localHash !== remoteQ.imageHash;
+
+              if (needDownload) {
+                downloadTasks.push({ remoteQ, mode: "update" });
+              } else {
+                await db
+                  .update(schema.questions)
+                  .set({
+                    subjectId: remoteQ.subjectId,
+                    chapterId: remoteQ.chapterId,
+                    mistakeId: remoteQ.mistakeId,
+                    sourceId: sId,
+                    answerKey: remoteQ.answerKey,
+                    note: remoteQ.note,
+                    revisionCount: remoteQ.revisionCount,
+                    lastRevisionDay: remoteQ.lastRevisionDay,
+                    stashed: remoteQ.stashed,
+                    driveFileId: remoteQ.driveFileId,
+                    updatedAt: remoteQ.updatedAt,
+                    syncedAt: remoteQ.updatedAt,
+                    isDeleted: false,
+                  })
+                  .where(eq(schema.questions.id, localQ.id));
+              }
+
+              await db
+                .delete(schema.syncQueue)
+                .where(
+                  and(
+                    eq(schema.syncQueue.entityType, "question"),
+                    eq(schema.syncQueue.entityId, localQ.id)
+                  )
+                );
+            }
+          } else {
+            // Timestamps equal: already in sync, ensure driveFileId is preserved
+            if (!localQ.driveFileId || localQ.driveFileId !== remoteQ.driveFileId || localQ.syncedAt == null) {
+              await db
+                .update(schema.questions)
+                .set({
+                  driveFileId: remoteQ.driveFileId,
+                  syncedAt: remoteQ.updatedAt,
+                })
+                .where(eq(schema.questions.id, localQ.id));
+            }
+            await db
+              .delete(schema.syncQueue)
+              .where(
+                and(
+                  eq(schema.syncQueue.entityType, "question"),
+                  eq(schema.syncQueue.entityId, localQ.id)
+                )
+              );
+          }
+        }
+      }
+
+      // Local questions missing in remote manifest -> keep locally and enqueue into sync_queue
+      for (const [id, localQ] of localQuestionMap.entries()) {
+        if (!remoteQuestionMap.has(id)) {
+          if (!localQ.isDeleted && !queuedQuestionIds.has(id)) {
+            await db.insert(schema.syncQueue).values({
+              id: newId(),
+              entityType: "question",
+              entityId: id,
+              action: "upsert",
+              createdAt: Date.now(),
+              attempts: 0,
+              status: "pending",
+            });
+            queuedQuestionIds.add(id);
+          }
+        }
+      }
+
+      // Download remote images with processWithRateLimit(..., 3, 50)
+      if (downloadTasks.length > 0) {
+        let downloadedCount = 0;
+        const totalDownloads = downloadTasks.length;
+        this.updateProgress({
+          status: "syncing",
+          total: totalDownloads,
+          processed: 0,
+          pending: totalDownloads,
+        });
+
+        await processWithRateLimit(downloadTasks, 3, 50, async (task) => {
+          const q = task.remoteQ;
+          const imageBlob = await downloadImage(accessToken, q.driveFileId);
+          const imageBuffer = await imageBlob.arrayBuffer();
+          const imageBytes = new Uint8Array(imageBuffer);
+          const sId = q.sourceId && validSourceIds.has(q.sourceId) ? q.sourceId : null;
+
+          if (task.mode === "insert") {
+            await db.insert(schema.questions).values({
+              id: q.id,
+              image: imageBytes,
+              createdAt: q.createdAt,
+              updatedAt: q.updatedAt,
+              syncedAt: q.updatedAt,
+              subjectId: q.subjectId,
+              chapterId: q.chapterId,
+              mistakeId: q.mistakeId,
+              sourceId: sId,
+              answerKey: q.answerKey,
+              note: q.note,
+              revisionCount: q.revisionCount,
+              lastRevisionDay: q.lastRevisionDay,
+              stashed: q.stashed,
+              driveFileId: q.driveFileId,
+              isDeleted: false,
+            });
+          } else {
+            await db
+              .update(schema.questions)
+              .set({
+                image: imageBytes,
+                createdAt: q.createdAt,
+                updatedAt: q.updatedAt,
+                syncedAt: q.updatedAt,
+                subjectId: q.subjectId,
+                chapterId: q.chapterId,
+                mistakeId: q.mistakeId,
+                sourceId: sId,
+                answerKey: q.answerKey,
+                note: q.note,
+                revisionCount: q.revisionCount,
+                lastRevisionDay: q.lastRevisionDay,
+                stashed: q.stashed,
+                driveFileId: q.driveFileId,
+                isDeleted: false,
+              })
+              .where(eq(schema.questions.id, q.id));
+          }
+
+          downloadedCount++;
+          this.updateProgress({
+            status: "syncing",
+            total: totalDownloads,
+            processed: downloadedCount,
+            pending: totalDownloads - downloadedCount,
+          });
+        });
+      }
+
+      // --- Update Remote Manifest ---
+      // Generate unified manifest.json containing ALL merged sources and questions
+      await this.uploadUnifiedManifest(db, accessToken, rootFolderId);
+
+      // --- Notify UI ---
+      // Dispatch window.dispatchEvent(new CustomEvent("mb:library-reload"))
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("mb:library-reload"));
+      }
+
+      // --- Drain Uploads ---
+      // Any local-only questions will now be in sync_queue and will be uploaded to Drive
+      await this.runSyncInternal(db, accessToken, rootFolderId);
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (errorMsg.includes("401")) {
+        this.updateProgress({ status: "unauthenticated" });
+      } else {
+        this.updateProgress({ status: "error", lastError: errorMsg });
+      }
+      throw err;
+    }
+  }
+
+  private async runSyncInternal(
+    db: PgliteDatabase<typeof schema>,
+    accessToken: string,
+    rootFolderId: string
+  ): Promise<void> {
+    await ensureUnsyncedEnqueued(db);
 
     const allQueueItems = await db
       .select()
@@ -497,7 +1067,6 @@ export class SyncRunner {
       lastError: undefined,
     });
 
-    const rootFolderId = await this.getRootFolderId(db, accessToken);
     let processedCount = 0;
     let has401Error = false;
 
@@ -594,91 +1163,7 @@ export class SyncRunner {
 
     // Upload updated manifest.json
     try {
-      const allSources = await db.select().from(schema.sources);
-      const syncedQuestions = await db
-        .select()
-        .from(schema.questions)
-        .where(isNotNull(schema.questions.driveFileId));
-
-      const manifestQuestions = await Promise.all(
-        syncedQuestions.map(async (q) => {
-          const subjectName = subjectById(q.subjectId)?.name ?? q.subjectId;
-          const chapterName = chapterById(q.chapterId)?.name ?? q.chapterId;
-          const fileName = formatQuestionFileName(q);
-          const imageHash = await computeBytesHash(q.image);
-          return {
-            id: q.id,
-            driveFileId: q.driveFileId!,
-            driveFilePath: `${subjectName}/${chapterName}/${fileName}`,
-            imageHash,
-            subjectId: q.subjectId,
-            chapterId: q.chapterId,
-            mistakeId: q.mistakeId,
-            sourceId: q.sourceId,
-            answerKey: q.answerKey,
-            note: q.note,
-            revisionCount: q.revisionCount,
-            lastRevisionDay: q.lastRevisionDay,
-            stashed: Boolean(q.stashed),
-            createdAt: Number(q.createdAt),
-            updatedAt: Number(q.updatedAt ?? q.createdAt),
-            isDeleted: Boolean(q.isDeleted),
-          };
-        })
-      );
-
-      const manifestSources = allSources.map((s) => ({
-        id: s.id,
-        name: s.name,
-        createdAt: Number(s.createdAt),
-        updatedAt: Number(s.updatedAt ?? s.createdAt),
-        isDeleted: Boolean(s.isDeleted),
-      }));
-
-      const nowTimestamp = Date.now();
-      const manifest: ManifestData = {
-        version: 1,
-        lastSyncedAt: nowTimestamp,
-        sources: manifestSources,
-        questions: manifestQuestions,
-      };
-
-      const cachedManifest = await db
-        .select()
-        .from(schema.syncMetadata)
-        .where(eq(schema.syncMetadata.key, "manifest_file_id"));
-      const existingManifestId = cachedManifest[0]?.value;
-
-      const manifestFileId = await uploadManifest(
-        accessToken,
-        manifest,
-        rootFolderId,
-        existingManifestId
-      );
-
-      await db
-        .insert(schema.syncMetadata)
-        .values({
-          key: "manifest_file_id",
-          value: manifestFileId,
-          updatedAt: nowTimestamp,
-        })
-        .onConflictDoUpdate({
-          target: schema.syncMetadata.key,
-          set: { value: manifestFileId, updatedAt: nowTimestamp },
-        });
-
-      await db
-        .insert(schema.syncMetadata)
-        .values({
-          key: "last_synced_at",
-          value: String(nowTimestamp),
-          updatedAt: nowTimestamp,
-        })
-        .onConflictDoUpdate({
-          target: schema.syncMetadata.key,
-          set: { value: String(nowTimestamp), updatedAt: nowTimestamp },
-        });
+      const nowTimestamp = await this.uploadUnifiedManifest(db, accessToken, rootFolderId);
 
       const remainingPending = await db
         .select()
@@ -704,6 +1189,10 @@ export class SyncRunner {
           lastSyncedAt: nowTimestamp,
           lastError: undefined,
         });
+      }
+
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("mb:library-reload"));
       }
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
