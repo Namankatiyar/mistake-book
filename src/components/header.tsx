@@ -12,7 +12,7 @@ import { Icon, IconButton, Tooltip } from "./ui";
 export function Header() {
   const pathname = usePathname();
   const { settings, resolved, update } = useSettings();
-  const { syncProgress, authStatus } = useDriveSync();
+  const { syncProgress, authStatus, openSignInModal } = useDriveSync();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -96,6 +96,12 @@ export function Header() {
 
   // The viewer has no chrome.
   if (pathname.startsWith("/viewer")) return null;
+
+  const isDriveDisconnected =
+    !authStatus.connected ||
+    syncProgress.status === "unauthenticated" ||
+    pillLabel === "Drive disconnected" ||
+    pillLabel === "Re-auth needed";
 
   return (
     <>
@@ -191,7 +197,13 @@ export function Header() {
             <Tooltip content={pillTooltip} side="bottom" asChild>
               <button
                 type="button"
-                onClick={() => setSettingsOpen(true)}
+                onClick={() => {
+                  if (isDriveDisconnected) {
+                    openSignInModal();
+                  } else {
+                    setSettingsOpen(true);
+                  }
+                }}
                 className="inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-surface/80 px-2 sm:px-2.5 text-[12px] font-medium text-muted hover:border-fg/20 hover:bg-soft hover:text-fg transition-colors select-none cursor-pointer"
                 aria-label={pillTooltip}
               >

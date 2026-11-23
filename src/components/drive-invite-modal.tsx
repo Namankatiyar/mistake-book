@@ -48,9 +48,11 @@ function GoogleDriveIcon({ className = "w-[54px] h-[48px]" }: { className?: stri
 
 export function DriveInviteModal() {
   const pathname = usePathname();
-  const { authStatus, authChecked, connectDrive } = useDriveSync();
+  const { authStatus, authChecked, connectDrive, signInModalOpen, closeSignInModal } = useDriveSync();
   const [mounted, setMounted] = useState(false);
-  const [isOpen, setIsOpen] = useState(false);
+  const [autoOpen, setAutoOpen] = useState(false);
+
+  const isOpen = autoOpen || signInModalOpen;
 
   // Initialize visit count and determine whether modal should appear
   useEffect(() => {
@@ -98,18 +100,19 @@ export function DriveInviteModal() {
 
     // Trigger on second visit or later, only if never signed in earlier and not dismissed
     if (visitCount >= 2 && !isDismissed && !hasSignedInEarlier) {
-      setIsOpen(true);
+      setAutoOpen(true);
     }
   }, [authChecked, authStatus.connected]);
 
   const handleDismiss = useCallback(() => {
-    setIsOpen(false);
+    setAutoOpen(false);
+    closeSignInModal();
     try {
       localStorage.setItem(STORAGE_DISMISSED, "true");
     } catch {
       // ignore
     }
-  }, []);
+  }, [closeSignInModal]);
 
   const handleSignIn = useCallback(() => {
     try {
@@ -118,9 +121,10 @@ export function DriveInviteModal() {
     } catch {
       // ignore
     }
-    setIsOpen(false);
+    setAutoOpen(false);
+    closeSignInModal();
     connectDrive();
-  }, [connectDrive]);
+  }, [closeSignInModal, connectDrive]);
 
   // Handle keyboard Escape to dismiss
   useEffect(() => {

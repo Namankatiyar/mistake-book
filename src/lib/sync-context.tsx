@@ -40,6 +40,9 @@ export type SyncContextValue = {
   authChecked: boolean;
   connectDrive: () => void;
   disconnectDrive: () => Promise<void>;
+  signInModalOpen: boolean;
+  openSignInModal: () => void;
+  closeSignInModal: () => void;
 };
 
 const SyncContext = createContext<SyncContextValue | null>(null);
@@ -58,6 +61,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const [authStatus, setAuthStatus] = useState<AuthStatus>({ connected: false });
   const [authChecked, setAuthChecked] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress>(DEFAULT_SYNC_PROGRESS);
+  const [signInModalOpen, setSignInModalOpen] = useState(false);
+
+  const openSignInModal = useCallback(() => setSignInModalOpen(true), []);
+  const closeSignInModal = useCallback(() => setSignInModalOpen(false), []);
 
   const runnerRef = useRef<SyncRunner | null>(null);
   const hasMergedOnConnectRef = useRef(false);
@@ -237,8 +244,23 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       authChecked,
       connectDrive,
       disconnectDrive,
+      signInModalOpen,
+      openSignInModal,
+      closeSignInModal,
     }),
-    [syncProgress, syncNow, mergeWithCloud, restoreFromDrive, authStatus, authChecked, connectDrive, disconnectDrive]
+    [
+      syncProgress,
+      syncNow,
+      mergeWithCloud,
+      restoreFromDrive,
+      authStatus,
+      authChecked,
+      connectDrive,
+      disconnectDrive,
+      signInModalOpen,
+      openSignInModal,
+      closeSignInModal,
+    ]
   );
 
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;
