@@ -6,16 +6,16 @@ import {
   FileDown,
   Square,
   CheckSquare,
-  Sparkles,
   ArrowLeft,
   ArrowRight,
   ExternalLink,
   RotateCcw,
-  Moon,
   Check,
   Loader2,
+  X,
+  Moon,
 } from "lucide-react";
-import { Modal, Button, IconButton, SubjectIcon } from "@/components/ui";
+import { Modal, Button, IconButton, SubjectIcon, Toggle } from "@/components/ui";
 import { useLibrary } from "@/lib/library";
 import { useSettings } from "@/lib/settings";
 import {
@@ -46,6 +46,65 @@ type AnalysisState = {
   isDark: boolean;
   previewUrl: string;
 };
+
+function OneColumnIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      width="34"
+      height="40"
+      viewBox="0 0 34 40"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+    >
+      <rect
+        x="1.5"
+        y="1.5"
+        width="31"
+        height="37"
+        rx="5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+      />
+      <line x1="6.5" y1="9" x2="27.5" y2="9" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <line x1="6.5" y1="16" x2="27.5" y2="16" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <line x1="6.5" y1="23" x2="27.5" y2="23" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <line x1="6.5" y1="30" x2="27.5" y2="30" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function TwoColumnsIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      width="34"
+      height="40"
+      viewBox="0 0 34 40"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+    >
+      <rect
+        x="1.5"
+        y="1.5"
+        width="31"
+        height="37"
+        rx="5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+      />
+      <line x1="17" y1="1.5" x2="17" y2="38.5" stroke="currentColor" strokeWidth="1.75" />
+      <line x1="6" y1="9" x2="12" y2="9" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <line x1="6" y1="16" x2="12" y2="16" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <line x1="6" y1="23" x2="12" y2="23" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <line x1="6" y1="30" x2="12" y2="30" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <line x1="22" y1="9" x2="28" y2="9" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <line x1="22" y1="16" x2="28" y2="16" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <line x1="22" y1="23" x2="28" y2="23" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <line x1="22" y1="30" x2="28" y2="30" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 export function ExportModal({
   open,
@@ -83,6 +142,7 @@ export function ExportModal({
   const [analyzingImages, setAnalyzingImages] = useState(false);
   const [imageAnalysis, setImageAnalysis] = useState<Record<string, AnalysisState>>({});
   const [inversions, setInversions] = useState<Record<string, boolean>>({});
+  const [darkModeInversionEnabled, setDarkModeInversionEnabled] = useState(true);
 
   // Step 3: Generation & Progress state
   const [progress, setProgress] = useState<ExportProgress>({
@@ -107,6 +167,9 @@ export function ExportModal({
       setPdfBlob(null);
       setStep(1);
       setErrorMsg(null);
+      setDarkModeInversionEnabled(true);
+      setInversions({});
+      setImageAnalysis({});
       return;
     }
 
@@ -213,7 +276,7 @@ export function ExportModal({
         try {
           const res = await detectDarkMode(q.image);
           results[q.id] = { isDark: res.isDark, previewUrl: res.previewUrl };
-          if (res.isDark && inversions[q.id] === undefined) {
+          if (res.isDark && darkModeInversionEnabled && inversions[q.id] === undefined) {
             newInversions[q.id] = true;
           }
         } catch {
@@ -234,35 +297,39 @@ export function ExportModal({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, selectedQuestions]);
+  }, [step, selectedQuestions, darkModeInversionEnabled]);
 
-  // Dark mode counters
-  const darkDetectedCount = useMemo(() => {
-    return selectedQuestions.filter((q) => imageAnalysis[q.id]?.isDark).length;
-  }, [selectedQuestions, imageAnalysis]);
-
-  const allDarkInverted = useMemo(() => {
-    const darkOnes = selectedQuestions.filter((q) => imageAnalysis[q.id]?.isDark);
-    if (darkOnes.length === 0) return false;
-    return darkOnes.every((q) => inversions[q.id]);
-  }, [selectedQuestions, imageAnalysis, inversions]);
-
-  const toggleAllDarkInversions = () => {
-    const next = { ...inversions };
-    const targetState = !allDarkInverted;
-    for (const q of selectedQuestions) {
-      if (imageAnalysis[q.id]?.isDark) {
-        next[q.id] = targetState;
+  const handleToggleDarkModeInversion = (checked?: boolean) => {
+    const nextState = checked !== undefined ? checked : !darkModeInversionEnabled;
+    setDarkModeInversionEnabled(nextState);
+    if (!nextState) {
+      setInversions({});
+    } else {
+      const nextInv: Record<string, boolean> = {};
+      const hasDarkDetected = selectedQuestions.some((q) => imageAnalysis[q.id]?.isDark);
+      for (const q of selectedQuestions) {
+        if (hasDarkDetected) {
+          if (imageAnalysis[q.id]?.isDark) {
+            nextInv[q.id] = true;
+          }
+        } else {
+          nextInv[q.id] = true;
+        }
       }
+      setInversions(nextInv);
     }
-    setInversions(next);
   };
 
   const toggleSingleInversion = (id: string) => {
-    setInversions((prev) => ({
-      ...prev,
-      [id]: !prev[id],
-    }));
+    setInversions((prev) => {
+      const next = {
+        ...prev,
+        [id]: !prev[id],
+      };
+      const anyInverted = Object.values(next).some(Boolean);
+      setDarkModeInversionEnabled(anyInverted);
+      return next;
+    });
   };
 
   // Step 3 Generation Trigger
@@ -329,18 +396,25 @@ export function ExportModal({
       open={open}
       onClose={onClose}
       label="Export Questions to PDF"
-      className="h-[88vh] max-h-[88vh] w-full max-w-[820px] flex flex-col overflow-hidden"
+      className="max-h-[90vh] w-full max-w-[740px] flex flex-col overflow-hidden"
     >
       {/* Header */}
       <div className="flex flex-none items-center justify-between border-b border-line px-6 py-4">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-7 w-7 items-center justify-center rounded-[6px] bg-soft text-fg">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-[8px] bg-soft text-fg border border-line/40">
             <FileDown className="h-4 w-4" />
           </div>
           <h2 className="text-[16px] font-semibold text-fg">Export Questions to PDF</h2>
         </div>
 
-        <IconButton name="x" label="Close export modal" onClick={onClose} />
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-muted hover:text-fg p-1.5 rounded-[6px] transition-colors"
+          aria-label="Close export modal"
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
 
       {/* Main Body per Step */}
@@ -553,63 +627,74 @@ export function ExportModal({
 
         {/* ==================== STEP 2: LAYOUT & DARK MODE ==================== */}
         {step === 2 && (
-          <div className="space-y-6">
-            {/* Layout Column Format Selection */}
-            <div className="rounded-[10px] border border-line bg-surface/40 p-4 space-y-3">
-              <span className="text-[12px] font-semibold uppercase tracking-wider text-muted">
+          <div className="space-y-6 py-1">
+            {/* PDF PAGE LAYOUT */}
+            <div className="space-y-3">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">
                 PDF Page Layout
               </span>
-              <div className="grid grid-cols-2 gap-3">
+
+              <div className="grid grid-cols-2 gap-4">
+                {/* 1 Column Card */}
                 <button
                   type="button"
                   onClick={() => setColumnFormat("1")}
-                  className={`flex flex-col items-start gap-1.5 rounded-[8px] border p-3.5 text-left transition-all ${
+                  className={`group relative flex flex-col items-start rounded-xl border p-5 text-left transition-all ${
                     columnFormat === "1"
-                      ? "border-fg bg-soft/80 shadow-xs"
-                      : "border-line bg-surface hover:border-line/80"
+                      ? "border-zinc-400 dark:border-zinc-400 bg-surface/80 ring-1 ring-zinc-400/20"
+                      : "border-line bg-surface/30 hover:border-line/90 hover:bg-surface/50"
                   }`}
                 >
-                  <div className="flex items-center justify-between w-full">
-                    <span className="text-[13px] font-semibold text-fg">1 Column</span>
-                    {columnFormat === "1" && <Check className="h-4 w-4 text-fg" />}
-                  </div>
-                  <p className="text-[12px] text-muted leading-relaxed">
-                    Full-width questions. Ideal for wide computer screenshots, long equations, and spacious printing.
+                  {columnFormat === "1" && (
+                    <Check className="absolute top-4 right-4 h-4 w-4 text-fg stroke-[2.5]" />
+                  )}
+                  <OneColumnIcon
+                    className={`mb-3.5 transition-colors ${
+                      columnFormat === "1" ? "text-fg" : "text-muted group-hover:text-fg"
+                    }`}
+                  />
+                  <span className="text-[15px] font-semibold text-fg">1 Column</span>
+                  <p className="mt-1 text-[13px] text-muted leading-relaxed">
+                    Full-width questions. Best for wide screenshots.
                   </p>
                 </button>
 
+                {/* 2 Columns Card */}
                 <button
                   type="button"
                   onClick={() => setColumnFormat("2")}
-                  className={`flex flex-col items-start gap-1.5 rounded-[8px] border p-3.5 text-left transition-all ${
+                  className={`group relative flex flex-col items-start rounded-xl border p-5 text-left transition-all ${
                     columnFormat === "2"
-                      ? "border-fg bg-soft/80 shadow-xs"
-                      : "border-line bg-surface hover:border-line/80"
+                      ? "border-zinc-400 dark:border-zinc-400 bg-surface/80 ring-1 ring-zinc-400/20"
+                      : "border-line bg-surface/30 hover:border-line/90 hover:bg-surface/50"
                   }`}
                 >
-                  <div className="flex items-center justify-between w-full">
-                    <span className="text-[13px] font-semibold text-fg">2 Columns</span>
-                    {columnFormat === "2" && <Check className="h-4 w-4 text-fg" />}
-                  </div>
-                  <p className="text-[12px] text-muted leading-relaxed">
-                    Newspaper booklet flow (fills Column 1, then Column 2). Highly compact and paper-saving.
+                  {columnFormat === "2" && (
+                    <Check className="absolute top-4 right-4 h-4 w-4 text-fg stroke-[2.5]" />
+                  )}
+                  <TwoColumnsIcon
+                    className={`mb-3.5 transition-colors ${
+                      columnFormat === "2" ? "text-fg" : "text-muted group-hover:text-fg"
+                    }`}
+                  />
+                  <span className="text-[15px] font-semibold text-fg">2 Columns</span>
+                  <p className="mt-1 text-[13px] text-muted leading-relaxed">
+                    Newspaper flow. Compact and paper-saving.
                   </p>
                 </button>
               </div>
             </div>
 
-            {/* Metadata Badges Toggle */}
-            <div className="rounded-[10px] border border-line bg-surface/40 p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-[13px] font-semibold text-fg">Question Metadata Strip</h4>
-                  <p className="text-[12px] text-muted">
-                    Compact badges above each question screenshot in the PDF.
-                  </p>
-                </div>
+            {/* Question metadata strip */}
+            <div className="space-y-2.5">
+              <div>
+                <h3 className="text-[14px] font-semibold text-fg">Question metadata strip</h3>
+                <p className="text-[13px] text-muted mt-0.5">
+                  Badges shown above each question.
+                </p>
               </div>
 
-              <div className="flex flex-wrap gap-2.5 pt-1">
+              <div className="flex flex-wrap items-center gap-2.5 pt-1">
                 {[
                   { key: "showSubject", label: "Subject" },
                   { key: "showChapter", label: "Chapter" },
@@ -617,7 +702,7 @@ export function ExportModal({
                   { key: "showSource", label: "Source" },
                   { key: "showAnswerKey", label: "Answer Key" },
                 ].map(({ key, label }) => {
-                  const val = metadata[key as keyof MetadataOptions];
+                  const isChecked = metadata[key as keyof MetadataOptions];
                   return (
                     <button
                       key={key}
@@ -628,48 +713,43 @@ export function ExportModal({
                           [key]: !prev[key as keyof MetadataOptions],
                         }))
                       }
-                      className={`inline-flex items-center gap-1.5 rounded-[6px] border px-2.5 py-1 text-[12px] transition-colors ${
-                        val
-                          ? "border-fg/40 bg-soft font-medium text-fg"
-                          : "border-line bg-surface text-muted hover:text-fg"
+                      className={`inline-flex items-center gap-2 rounded-[8px] border px-3 py-1.5 text-[13px] font-medium transition-all cursor-pointer ${
+                        isChecked
+                          ? "border-line bg-soft text-fg hover:border-fg/30"
+                          : "border-line/60 bg-surface/30 text-muted hover:border-line hover:text-fg"
                       }`}
                     >
-                      {val ? (
-                        <CheckSquare className="h-3.5 w-3.5 text-fg" />
+                      {isChecked ? (
+                        <CheckSquare className="h-4 w-4 text-fg stroke-[2]" />
                       ) : (
-                        <Square className="h-3.5 w-3.5 text-muted" />
+                        <Square className="h-4 w-4 text-muted stroke-[1.75]" />
                       )}
-                      {label}
+                      <span>{label}</span>
                     </button>
                   );
                 })}
               </div>
             </div>
 
-            {/* Client-side Dark Mode Detection & Inversion Grid */}
-            <div className="rounded-[10px] border border-line bg-surface/40 p-4 space-y-3.5">
-              <div className="flex items-center justify-between flex-wrap gap-2">
+            {/* Dark mode screenshot inversion */}
+            <div className="space-y-3.5 pt-1">
+              <div className="flex items-center justify-between gap-4">
                 <div>
-                  <div className="flex items-center gap-2">
-                    <Moon className="h-4 w-4 text-muted" />
-                    <h4 className="text-[13px] font-semibold text-fg">
-                      Dark Mode Screenshot Inversion
-                    </h4>
-                  </div>
-                  <p className="text-[12px] text-muted">
-                    Inverts dark backgrounds to pure white paper for clear printing and ink-saving.
+                  <h3 className="text-[14px] font-semibold text-fg">
+                    Dark mode screenshot inversion
+                  </h3>
+                  <p className="text-[13px] text-muted mt-0.5">
+                    Turns dark backgrounds into white paper for printing.
                   </p>
                 </div>
 
-                <Button
-                  size="sm"
-                  variant={allDarkInverted ? "outline" : "ghost"}
-                  onClick={toggleAllDarkInversions}
-                  disabled={darkDetectedCount === 0}
-                >
-                  <Sparkles className="h-3.5 w-3.5 mr-1 text-amber-500" />
-                  {allDarkInverted ? "Undo All Dark Inversions" : `Invert Detected (${darkDetectedCount})`}
-                </Button>
+                <div className="shrink-0">
+                  <Toggle
+                    checked={darkModeInversionEnabled}
+                    onChange={(v) => handleToggleDarkModeInversion(v)}
+                    label="Dark mode screenshot inversion"
+                  />
+                </div>
               </div>
 
               {analyzingImages && (
@@ -680,7 +760,7 @@ export function ExportModal({
               )}
 
               {/* Grid of question thumbnails with instant preview */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-[300px] overflow-y-auto pt-1">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-[260px] overflow-y-auto pt-1">
                 {selectedQuestions.map((q) => {
                   const analysis = imageAnalysis[q.id];
                   const isInverted = !!inversions[q.id];
@@ -723,7 +803,7 @@ export function ExportModal({
                         <button
                           type="button"
                           onClick={() => toggleSingleInversion(q.id)}
-                          className={`px-1.5 py-0.5 rounded-[4px] text-[10px] font-medium transition-colors ${
+                          className={`px-1.5 py-0.5 rounded-[4px] text-[10px] font-medium transition-colors cursor-pointer ${
                             isInverted
                               ? "bg-fg text-bg font-semibold"
                               : "bg-soft text-muted hover:text-fg"
@@ -846,22 +926,23 @@ export function ExportModal({
       </div>
 
       {/* Footer Controls */}
-      <div className="flex flex-none items-center justify-between border-t border-line px-6 py-3.5 bg-bg">
+      <div className="flex flex-none items-center justify-between border-t border-line px-6 py-4 bg-bg">
         <div>
           {step > 1 && step < 3 && (
             <Button
               size="sm"
               variant="ghost"
               onClick={() => setStep((prev) => (prev - 1) as 1 | 2)}
+              className="gap-1.5 text-muted hover:text-fg"
             >
-              <ArrowLeft className="h-3.5 w-3.5 mr-1" />
-              Back
+              <ArrowLeft className="h-4 w-4" />
+              <span>Back</span>
             </Button>
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="ghost" onClick={onClose}>
+        <div className="flex items-center gap-3">
+          <Button size="sm" variant="ghost" onClick={onClose} className="text-muted hover:text-fg">
             Cancel
           </Button>
 
@@ -871,9 +952,10 @@ export function ExportModal({
               variant="primary"
               disabled={selectedQuestions.length === 0}
               onClick={() => setStep(2)}
+              className="gap-1.5"
             >
-              Configure Layout &amp; Colors
-              <ArrowRight className="h-3.5 w-3.5 ml-1" />
+              <span>Configure Layout &amp; Colors</span>
+              <ArrowRight className="h-4 w-4" />
             </Button>
           )}
 
@@ -883,16 +965,17 @@ export function ExportModal({
               variant="primary"
               disabled={selectedQuestions.length === 0}
               onClick={handleGoToStep3}
+              className="gap-1.5 font-semibold"
             >
-              Generate PDF
-              <ArrowRight className="h-3.5 w-3.5 ml-1" />
+              <span>Generate PDF</span>
+              <ArrowRight className="h-4 w-4" />
             </Button>
           )}
 
           {step === 3 && progress.stage === "done" && (
-            <Button size="sm" variant="primary" onClick={handleDownload}>
-              <Download className="h-3.5 w-3.5 mr-1" />
-              Download
+            <Button size="sm" variant="primary" onClick={handleDownload} className="gap-1.5">
+              <Download className="h-4 w-4" />
+              <span>Download</span>
             </Button>
           )}
         </div>
