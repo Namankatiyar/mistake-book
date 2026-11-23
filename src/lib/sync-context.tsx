@@ -37,6 +37,7 @@ export type SyncContextValue = {
   mergeWithCloud: () => Promise<void>;
   restoreFromDrive: () => Promise<void>;
   authStatus: AuthStatus;
+  authChecked: boolean;
   connectDrive: () => void;
   disconnectDrive: () => Promise<void>;
 };
@@ -55,6 +56,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const isLibraryReady = libraryCtx ? libraryCtx.ready : true;
 
   const [authStatus, setAuthStatus] = useState<AuthStatus>({ connected: false });
+  const [authChecked, setAuthChecked] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress>(DEFAULT_SYNC_PROGRESS);
 
   const runnerRef = useRef<SyncRunner | null>(null);
@@ -73,14 +75,24 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       if (!res.ok) {
         const unauth: AuthStatus = { connected: false };
         setAuthStatus(unauth);
+        setAuthChecked(true);
         return unauth;
       }
       const data = (await res.json()) as AuthStatus;
       setAuthStatus(data);
+      if (data.connected && typeof window !== "undefined") {
+        try {
+          localStorage.setItem("mb.has_signed_in", "true");
+        } catch {
+          // ignore
+        }
+      }
+      setAuthChecked(true);
       return data;
     } catch {
       const unauth: AuthStatus = { connected: false };
       setAuthStatus(unauth);
+      setAuthChecked(true);
       return unauth;
     }
   }, []);
@@ -186,6 +198,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
   const connectDrive = useCallback(() => {
     if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("mb.has_signed_in", "true");
+      } catch {
+        // ignore
+      }
       // Full browser navigation is required to trigger OAuth redirection to Google
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination
       window.location.href = "/api/auth/google";
@@ -217,10 +234,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       mergeWithCloud,
       restoreFromDrive,
       authStatus,
+      authChecked,
       connectDrive,
       disconnectDrive,
     }),
-    [syncProgress, syncNow, mergeWithCloud, restoreFromDrive, authStatus, connectDrive, disconnectDrive]
+    [syncProgress, syncNow, mergeWithCloud, restoreFromDrive, authStatus, authChecked, connectDrive, disconnectDrive]
   );
 
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;

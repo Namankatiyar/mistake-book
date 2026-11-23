@@ -7,6 +7,7 @@ import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
 import "./globals.css";
 import { CaptureProvider } from "@/components/capture";
+import { DriveInviteModal } from "@/components/drive-invite-modal";
 import { Header } from "@/components/header";
 import { PwaRegister } from "@/components/pwa-register";
 import { Toaster } from "@/components/toaster";
@@ -77,6 +78,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <CaptureProvider>
                   <Header />
                   {children}
+                  <DriveInviteModal />
                 </CaptureProvider>
               </SyncProvider>
             </LibraryProvider>
