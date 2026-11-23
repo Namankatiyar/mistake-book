@@ -6,7 +6,7 @@ import { useObjectUrl } from "@/lib/hooks";
 import { useLibrary } from "@/lib/library";
 import { mistakeById, type Question } from "@/lib/model";
 import { useSettings } from "@/lib/settings";
-import { chapterById } from "@/lib/syllabus";
+import { chapterById, subjectById } from "@/lib/syllabus";
 import { TagEditor } from "./tag-editor";
 import { Icon, IconButton, RevisionBadge, Tooltip } from "./ui";
 
@@ -21,9 +21,9 @@ function ToastProgressBar({ duration = 5000 }: { duration?: number }) {
   }, []);
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 h-[2.5px] w-full overflow-hidden bg-line/40">
+    <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-[2.5px] w-full overflow-hidden bg-line/40">
       <div
-        className="h-full bg-fg/80"
+        className="h-full bg-fg/70"
         style={{
           width: animating ? "0%" : "100%",
           transition: animating ? `width ${duration}ms linear` : "none",
@@ -48,6 +48,7 @@ export function QuestionCard({
 
   const mistake = mistakeById(question.mistakeId);
   const chapter = chapterById(question.chapterId);
+  const subject = question.subjectId ? subjectById(question.subjectId) : undefined;
   const source = question.sourceId
     ? sources.find((s) => s.id === question.sourceId)
     : undefined;
@@ -66,12 +67,10 @@ export function QuestionCard({
 
     toast.custom(
       (t) => (
-        <div className="toast-undo-card group relative flex w-[340px] items-center justify-between gap-3 overflow-hidden rounded-[10px] border border-line bg-surface px-3.5 py-2.5 text-fg shadow-lg select-none">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="truncate text-[13px] font-medium text-fg">
-              Question deleted
-            </span>
-          </div>
+        <div className="group relative flex w-[356px] items-center justify-between gap-3 overflow-hidden rounded-full border border-line bg-surface px-4 py-2.5 text-fg shadow-lg select-none">
+          <span className="truncate text-[13px] font-medium text-fg">
+            Question deleted
+          </span>
           <button
             type="button"
             onClick={() => {
@@ -79,7 +78,7 @@ export function QuestionCard({
               cancelDelete(question.id);
               toast.dismiss(t);
             }}
-            className="shrink-0 cursor-pointer rounded-[6px] border border-line bg-soft px-2.5 py-1 text-[12px] font-medium text-fg transition-colors hover:bg-line/80 active:scale-95"
+            className="shrink-0 cursor-pointer rounded-full bg-fg px-3 py-1 text-[12px] font-medium text-bg transition-opacity hover:opacity-90 active:scale-95"
           >
             Undo
           </button>
@@ -128,7 +127,7 @@ export function QuestionCard({
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={url}
-                  alt={`Question — ${chapter?.name ?? "chapter"}`}
+                  alt={`Question — ${chapter?.name ?? subject?.name ?? "question"}`}
                   className="h-full w-full object-contain p-1.5"
                   loading="lazy"
                 />
@@ -159,69 +158,76 @@ export function QuestionCard({
             )}
           </div>
 
-          {/* Middle Row: Chapter Name (text-xs), Actions */}
-          <div className="mt-2 flex items-center justify-between gap-1.5">
-            <h3 className="truncate text-xs font-semibold tracking-tight text-fg leading-none">
-              {chapter?.name ?? "Unknown Chapter"}
-            </h3>
+          {/* Region below image */}
+          <div className="px-1.5">
+            {/* Middle Row: Chapter Name (text-xs), Actions */}
+            <div className="mt-2 flex items-center justify-between gap-1.5">
+              <h3
+                className={`truncate text-xs font-semibold tracking-tight leading-none ${
+                  chapter?.name || subject?.name ? "text-fg" : "text-muted italic"
+                }`}
+              >
+                {chapter?.name ?? subject?.name ?? "Untagged"}
+              </h3>
 
-            <div
-              className="flex items-center gap-1 shrink-0"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <IconButton
-                name="pencil"
-                label="Edit tags"
-                tooltipSide="top"
-                size={12}
-                className="!h-6 !w-6 text-neutral-400 hover:text-fg hover:bg-soft rounded-[5px]"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setEditing(true);
-                }}
-              />
-              <Tooltip content="Delete question" side="top" asChild>
-                <button
-                  type="button"
-                  aria-label="Delete question"
-                  className="flex h-6 w-6 items-center justify-center rounded-[5px] bg-neutral-800/80 dark:bg-[#252525] border border-line/60 dark:border-white/5 text-neutral-300 dark:text-neutral-300 transition-all hover:bg-red-500/15 hover:border-red-500/30 hover:text-red-400 active:scale-95 cursor-pointer"
+              <div
+                className="flex items-center gap-1 shrink-0"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <IconButton
+                  name="pencil"
+                  label="Edit tags"
+                  tooltipSide="top"
+                  size={12}
+                  className="!h-6 !w-6 text-neutral-400 hover:text-fg hover:bg-soft rounded-[5px]"
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleDelete();
+                    setEditing(true);
                   }}
-                >
-                  <Icon name="trash" size={12} />
-                </button>
-              </Tooltip>
+                />
+                <Tooltip content="Delete question" side="top" asChild>
+                  <button
+                    type="button"
+                    aria-label="Delete question"
+                    className="flex h-6 w-6 items-center justify-center rounded-[5px] bg-neutral-800/80 dark:bg-[#252525] border border-line/60 dark:border-white/5 text-neutral-300 dark:text-neutral-300 transition-all hover:bg-red-500/15 hover:border-red-500/30 hover:text-red-400 active:scale-95 cursor-pointer"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete();
+                    }}
+                  >
+                    <Icon name="trash" size={12} />
+                  </button>
+                </Tooltip>
+              </div>
             </div>
-          </div>
 
-          {/* Bottom Row: Mistake Reason (with thin horizontal separator above) */}
-          {mistake && (
-            <div className="mt-2 border-t border-line/70 dark:border-white/10 pt-2 flex items-center gap-1.5 min-w-0 px-1">
-              <span
-                className="h-1.5 w-1.5 rounded-full shrink-0"
-                style={{
-                  backgroundColor:
-                    mistake.tone === "red"
-                      ? "#ef4444"
-                      : mistake.tone === "orange"
-                        ? "#f97316"
-                        : "#eab308",
-                }}
-                aria-hidden="true"
-              />
-              <span className="truncate text-xs font-normal text-muted dark:text-neutral-400">
-                {mistake.label}
-              </span>
-            </div>
-          )}
+            {/* Bottom Row: Mistake Reason (with thin horizontal separator above) */}
+            {mistake && (
+              <div className="mt-2 border-t border-line/70 dark:border-white/10 pt-2 flex items-center gap-1.5 min-w-0">
+                <span
+                  className="h-1.5 w-1.5 rounded-full shrink-0"
+                  style={{
+                    backgroundColor:
+                      mistake.tone === "red"
+                        ? "#ef4444"
+                        : mistake.tone === "orange"
+                          ? "#f97316"
+                          : "#eab308",
+                  }}
+                  aria-hidden="true"
+                />
+                <span className="truncate text-xs font-normal text-muted dark:text-neutral-400">
+                  {mistake.label}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Answer & note preview when global setting is active */}
         {settings.showAnswers && (question.answerKey || question.note) && (
           <div
-            className="fade-in mt-1.5 space-y-0.5 rounded-[6px] border border-line/60 bg-soft/40 px-2 py-1 text-xs"
+            className="fade-in mt-1.5 mx-1.5 space-y-0.5 rounded-[6px] border border-line/60 bg-soft/40 px-2 py-1 text-xs"
             onClick={(e) => e.stopPropagation()}
           >
             {question.answerKey && (

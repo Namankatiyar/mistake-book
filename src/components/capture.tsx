@@ -18,10 +18,22 @@ import {
   writeCaptureDefaults,
   type CaptureDefaults,
 } from "@/lib/settings";
-import { chapterById } from "@/lib/syllabus";
-import { useToast } from "@/lib/toast";
+import {
+  chapterById,
+  subjectById,
+  subjectOfChapter,
+} from "@/lib/syllabus";
+import { mistakeById } from "@/lib/model";
+import { toast } from "sonner";
 import { MistakeField, SourceField, SubjectChapterFields } from "./fields";
 import { Button, Icon, IconButton, Kbd, Modal } from "./ui";
+
+export type ActiveCaptureFilters = {
+  subjectId?: string | null;
+  chapterId?: string | null;
+  mistakeId?: string | null;
+  sourceId?: string | null;
+};
 
 type Draft = { key: string; blob: Blob | null };
 
@@ -29,12 +41,66 @@ const CaptureContext = createContext<{
   openModal: () => void;
   openPicker: () => void;
   openFileDialog: () => void;
+  setActiveFilters: (filters: ActiveCaptureFilters | null) => void;
 } | null>(null);
 
 export function useCapture() {
   const ctx = useContext(CaptureContext);
   if (!ctx) throw new Error("useCapture must be used inside CaptureProvider");
   return ctx;
+}
+
+export function useRegisterActiveFilters(filters: ActiveCaptureFilters | null) {
+  const { setActiveFilters } = useCapture();
+  useEffect(() => {
+    setActiveFilters(filters);
+    return () => {
+      setActiveFilters(null);
+    };
+  }, [filters, setActiveFilters]);
+}
+
+function getSessionFilters(): ActiveCaptureFilters | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem("mb.listState");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const chapterId = parsed.chapterId || null;
+    const subjectId =
+      parsed.subjectId || (chapterId ? subjectOfChapter(chapterId)?.id ?? null : null);
+    const mistakeId =
+      parsed.mistake && parsed.mistake !== "all" && parsed.mistake !== "none"
+        ? parsed.mistake
+        : null;
+    const sourceId =
+      parsed.source && parsed.source !== "all" && parsed.source !== "none"
+        ? parsed.source
+        : null;
+    return { subjectId, chapterId, mistakeId, sourceId };
+  } catch {
+    return null;
+  }
+}
+
+async function extractClipboardFiles(): Promise<File[]> {
+  if (typeof navigator === "undefined" || !navigator.clipboard?.read) return [];
+  try {
+    const items = await navigator.clipboard.read();
+    const files: File[] = [];
+    for (const item of items) {
+      for (const type of item.types) {
+        if (type.startsWith("image/")) {
+          const blob = await item.getType(type);
+          const ext = type.split("/")[1] || "png";
+          files.push(new File([blob], `screenshot.${ext}`, { type }));
+        }
+      }
+    }
+    return files;
+  } catch {
+    return [];
+  }
 }
 
 function isImageFile(file: File): boolean {
@@ -73,7 +139,6 @@ function imageFiles(list: Iterable<File | null>): File[] {
 
 export function CaptureProvider({ children }: { children: ReactNode }) {
   const { addQuestion, sources } = useLibrary();
-  const { push } = useToast();
   const [defaults, setDefaults] = useState<CaptureDefaults>({
     subjectId: "phy",
     chapterId: "phy-units",
@@ -88,6 +153,12 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
   defaultsRef.current = defaults;
   const sourcesRef = useRef(sources);
   sourcesRef.current = sources;
+  const activeFiltersRef = useRef<ActiveCaptureFilters | null>(null);
+  const lastInstantSaveTime = useRef(0);
+
+  const setActiveFilters = useCallback((filters: ActiveCaptureFilters | null) => {
+    activeFiltersRef.current = filters;
+  }, []);
 
   useEffect(() => {
     setDefaults(readCaptureDefaults());
@@ -137,56 +208,118 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
 
   const saveInstant = useCallback(
     async (files: File[]) => {
-      const d = defaultsRef.current;
+      if (files.length === 0) return;
+      const now = Date.now();
+      if (now - lastInstantSaveTime.current < 500) return;
+      lastInstantSaveTime.current = now;
+
+      const active = activeFiltersRef.current ?? getSessionFilters();
+      const chapterId = active?.chapterId || "";
+      const subjectId =
+        active?.subjectId ||
+        (chapterId ? subjectOfChapter(chapterId)?.id || "" : "");
+      const mistakeId = active?.mistakeId || null;
       const sourceId =
-        d.sourceId && sourcesRef.current.some((s) => s.id === d.sourceId)
-          ? d.sourceId
+        active?.sourceId && sourcesRef.current.some((s) => s.id === active.sourceId)
+          ? active.sourceId
           : null;
+
       let saved = 0;
       for (const f of files) {
         const q = await addQuestion({
           image: f,
-          subjectId: d.subjectId,
-          chapterId: d.chapterId,
-          mistakeId: null,
+          subjectId,
+          chapterId,
+          mistakeId,
           sourceId,
           answerKey: "",
           note: "",
         });
         if (q) saved += 1;
       }
+
       if (saved > 0) {
-        const chapter = chapterById(d.chapterId)?.name ?? "chapter";
-        push(
-          saved === 1
-            ? `Saved to ${chapter}`
-            : `Saved ${saved} questions to ${chapter}`,
-        );
+        const parts: string[] = [];
+        const ch = chapterId ? chapterById(chapterId) : null;
+        const sub = subjectId ? subjectById(subjectId) : null;
+        if (ch) {
+          parts.push(ch.name);
+        } else if (sub) {
+          parts.push(sub.name);
+        }
+        if (mistakeId) {
+          const m = mistakeById(mistakeId);
+          if (m) parts.push(m.label);
+        }
+        if (sourceId) {
+          const s = sourcesRef.current.find((src) => src.id === sourceId);
+          if (s) parts.push(s.name);
+        }
+
+        if (parts.length > 0) {
+          const target = parts.join(" · ");
+          toast(
+            saved === 1
+              ? `Saved to ${target}`
+              : `Saved ${saved} questions to ${target}`,
+          );
+        } else {
+          toast(
+            saved === 1
+              ? "Saved question (untagged)"
+              : `Saved ${saved} questions (untagged)`,
+          );
+        }
       }
     },
-    [addQuestion, push],
+    [addQuestion],
   );
 
-  // Track Shift because ClipboardEvent doesn't expose modifier keys.
+  // Track modifier keys and Ctrl+Shift+V shortcut
   useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.key === "Shift") shiftHeld.current = true;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      shiftHeld.current = e.shiftKey;
+
+      const isV = e.key === "v" || e.key === "V" || e.code === "KeyV";
+      const isModifier = e.ctrlKey || e.metaKey;
+
+      if (isModifier && e.shiftKey && isV) {
+        const target = e.target as HTMLElement | null;
+        const isEditable =
+          target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.isContentEditable);
+
+        if (!isEditable) {
+          e.preventDefault();
+          void (async () => {
+            const files = await extractClipboardFiles();
+            if (files.length > 0) {
+              await saveInstant(files);
+            }
+          })();
+        }
+      }
     };
-    const up = (e: KeyboardEvent) => {
-      if (e.key === "Shift") shiftHeld.current = false;
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      shiftHeld.current = e.shiftKey;
     };
-    const blur = () => {
+
+    const handleBlur = () => {
       shiftHeld.current = false;
     };
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
-    window.addEventListener("blur", blur);
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleBlur);
     return () => {
-      window.removeEventListener("keydown", down);
-      window.removeEventListener("keyup", up);
-      window.removeEventListener("blur", blur);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleBlur);
     };
-  }, []);
+  }, [saveInstant]);
 
   // Ctrl+V stages a draft (pastes queue up); Ctrl+Shift+V saves instantly.
   useEffect(() => {
@@ -194,8 +327,9 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
       if (!e.clipboardData) return;
       const files = extractImageFiles(e.clipboardData);
       if (files.length === 0) return;
+      const isShift = shiftHeld.current || (e as unknown as KeyboardEvent).shiftKey;
       e.preventDefault();
-      if (shiftHeld.current) {
+      if (isShift) {
         void saveInstant(files);
       } else {
         enqueue(files);
@@ -265,9 +399,9 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
       writeCaptureDefaults(next);
       setQueue((prev) => prev.slice(1));
       const remaining = queue.length - 1;
-      push(remaining > 0 ? `Saved · ${remaining} more in queue` : "Saved");
+      toast(remaining > 0 ? `Saved · ${remaining} more in queue` : "Saved");
     },
-    [queue, addQuestion, push],
+    [queue, addQuestion],
   );
 
   const discardDraft = useCallback(() => {
@@ -275,8 +409,8 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ openModal, openPicker: openModal, openFileDialog }),
-    [openModal, openFileDialog],
+    () => ({ openModal, openPicker: openModal, openFileDialog, setActiveFilters }),
+    [openModal, openFileDialog, setActiveFilters],
   );
   const current = queue[0];
 
@@ -355,7 +489,6 @@ function DraftModal({
 }) {
   const url = useObjectUrl(blob ?? undefined);
   const { sources } = useLibrary();
-  const { push } = useToast();
   const [subjectId, setSubjectId] = useState(defaults.subjectId);
   const [chapterId, setChapterId] = useState(defaults.chapterId);
   const [sourceId, setSourceId] = useState<string | null>(
@@ -374,7 +507,7 @@ function DraftModal({
   const submit = async () => {
     if (saving) return;
     if (!blob) {
-      push("Upload, paste, or drop a question image first");
+      toast("Upload, paste, or drop a question image first");
       return;
     }
     setSaving(true);
@@ -519,7 +652,7 @@ function DraftModal({
                 </p>
                 <div className="mt-3 flex flex-wrap items-center justify-center gap-2 text-[12px] text-muted">
                   <span className="inline-flex items-center gap-1">
-                    <Kbd>Ctrl</Kbd>+<Kbd>V</Kbd> to paste screenshot
+                    <Kbd>Ctrl</Kbd> + <Kbd>V</Kbd> to paste screenshot
                   </span>
                   <span aria-hidden="true">·</span>
                   <span>Drag & drop</span>

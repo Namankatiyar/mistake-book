@@ -598,7 +598,7 @@ export function SettingsModal({
               keys: ["Ctrl", "V"],
             },
             {
-              label: "Save instantly with the current labels",
+              label: "Save instantly with active filters (or untagged)",
               keys: ["Ctrl", "Shift", "V"],
             },
             { label: "Save the current draft", keys: ["Enter"] },

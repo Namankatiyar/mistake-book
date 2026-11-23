@@ -126,16 +126,15 @@ export function ExportModal({
   const [selectedSubjectIds, setSelectedSubjectIds] = useState<string[]>([]);
   const [selectedMistakeIds, setSelectedMistakeIds] = useState<string[]>([]);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
-  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set());
 
   // Step 2: PDF Layout & Dark mode options
   const [columnFormat, setColumnFormat] = useState<ColumnFormat>("2");
+  const [showAnswers, setShowAnswers] = useState(false);
   const [metadata, setMetadata] = useState<MetadataOptions>({
     showSubject: true,
     showChapter: true,
     showMistake: true,
     showSource: true,
-    showAnswerKey: true,
   });
 
   // Dark mode image recognition state
@@ -167,6 +166,7 @@ export function ExportModal({
       setPdfBlob(null);
       setStep(1);
       setErrorMsg(null);
+      setShowAnswers(false);
       setDarkModeInversionEnabled(true);
       setInversions({});
       setImageAnalysis({});
@@ -192,32 +192,10 @@ export function ExportModal({
         ? [initialSource]
         : sources.map((s) => s.id);
     setSelectedSourceIds(activeSrcIds);
-
-    // Pre-populate question selection based on current page filters
-    let initialList = questions.filter((q) =>
-      initialStash === "active" ? !q.stashed : initialStash === "stashed" ? q.stashed : true
-    );
-    if (initialChapterId) {
-      initialList = initialList.filter((q) => q.chapterId === initialChapterId);
-    } else if (initialSubjectId) {
-      initialList = initialList.filter((q) => q.subjectId === initialSubjectId);
-    }
-    if (initialMistake === "none") {
-      initialList = initialList.filter((q) => !q.mistakeId);
-    } else if (initialMistake !== "all") {
-      initialList = initialList.filter((q) => q.mistakeId === initialMistake);
-    }
-    if (initialSource === "none") {
-      initialList = initialList.filter((q) => !q.sourceId);
-    } else if (initialSource !== "all") {
-      initialList = initialList.filter((q) => q.sourceId === initialSource);
-    }
-
-    setSelectedQuestionIds(new Set(initialList.map((q) => q.id)));
-  }, [open, initialSubjectId, initialChapterId, initialMistake, initialSource, initialStash, syllabus, sources, questions]);
+  }, [open, initialSubjectId, initialChapterId, initialMistake, initialSource, initialStash, syllabus, sources]);
 
   // Questions filtered by tag pills
-  const availableQuestions = useMemo(() => {
+  const selectedQuestions = useMemo(() => {
     const subSet = new Set(selectedSubjectIds);
     const misSet = new Set(selectedMistakeIds);
     const srcSet = new Set(selectedSourceIds);
@@ -231,30 +209,6 @@ export function ExportModal({
       return true;
     });
   }, [questions, selectedSubjectIds, selectedMistakeIds, selectedSourceIds, initialStash]);
-
-  // Sync selected questions when filters change
-  const handleToggleAllAvailable = () => {
-    const allSelected = availableQuestions.every((q) => selectedQuestionIds.has(q.id));
-    const next = new Set(selectedQuestionIds);
-    if (allSelected) {
-      for (const q of availableQuestions) next.delete(q.id);
-    } else {
-      for (const q of availableQuestions) next.add(q.id);
-    }
-    setSelectedQuestionIds(next);
-  };
-
-  const handleToggleQuestion = (id: string) => {
-    const next = new Set(selectedQuestionIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelectedQuestionIds(next);
-  };
-
-  // Selected questions ordered
-  const selectedQuestions = useMemo(() => {
-    return questions.filter((q) => selectedQuestionIds.has(q.id));
-  }, [questions, selectedQuestionIds]);
 
   // Run Dark Mode Recognition whenever moving to Step 2
   useEffect(() => {
@@ -354,6 +308,7 @@ export function ExportModal({
           sources,
           columnFormat,
           metadata,
+          showAnswers,
           inversions,
           onProgress: (p) => setProgress(p),
         });
@@ -368,7 +323,7 @@ export function ExportModal({
     };
 
     void runGenerate();
-  }, [step, selectedQuestions, sources, columnFormat, metadata, inversions]);
+  }, [step, selectedQuestions, sources, columnFormat, metadata, showAnswers, inversions]);
 
   const handleGoToStep3 = () => {
     generationTriggeredRef.current = false;
@@ -429,7 +384,7 @@ export function ExportModal({
                   Filter by Tag Combos
                 </span>
                 <span className="text-[12px] text-muted">
-                  {availableQuestions.length} matches in database
+                  {selectedQuestions.length} matches in database
                 </span>
               </div>
 
@@ -535,93 +490,6 @@ export function ExportModal({
                 </div>
               )}
             </div>
-
-            {/* Questions Checklist */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between px-1">
-                <span className="text-[13px] font-medium text-fg">
-                  Questions to Include ({selectedQuestions.length} of {availableQuestions.length} selected)
-                </span>
-                <button
-                  type="button"
-                  onClick={handleToggleAllAvailable}
-                  className="text-[12px] font-medium text-muted hover:text-fg underline underline-offset-2"
-                >
-                  {availableQuestions.every((q) => selectedQuestionIds.has(q.id))
-                    ? "Deselect All"
-                    : "Select All"}
-                </button>
-              </div>
-
-              {availableQuestions.length === 0 ? (
-                <div className="rounded-[8px] border border-line bg-surface/30 p-8 text-center text-muted text-[13px]">
-                  No questions match the selected tag filters. Try enabling more subjects or mistake tags above.
-                </div>
-              ) : (
-                <div className="panel divide-y divide-line max-h-[340px] overflow-y-auto">
-                  {availableQuestions.map((q) => {
-                    const isSelected = selectedQuestionIds.has(q.id);
-                    const ch = chapterById(q.chapterId);
-                    const m = mistakeById(q.mistakeId);
-                    const src = q.sourceId ? sources.find((s) => s.id === q.sourceId) : null;
-
-                    return (
-                      <div
-                        key={q.id}
-                        onClick={() => handleToggleQuestion(q.id)}
-                        className={`flex items-center gap-3.5 px-4 py-2.5 cursor-pointer transition-colors ${
-                          isSelected ? "bg-soft/50" : "hover:bg-soft/20"
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          className="shrink-0 text-muted hover:text-fg"
-                          aria-label={isSelected ? "Deselect question" : "Select question"}
-                        >
-                          {isSelected ? (
-                            <CheckSquare className="h-4 w-4 text-fg" />
-                          ) : (
-                            <Square className="h-4 w-4 text-muted" />
-                          )}
-                        </button>
-
-                        <div className="min-w-0 flex-1 flex flex-wrap items-center gap-2">
-                          <span className="text-[13px] font-medium text-fg truncate">
-                            {ch?.name || "Unknown Chapter"}
-                          </span>
-
-                          {m && (
-                            <span
-                              className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-[4px] border ${
-                                m.tone === "red"
-                                  ? "border-red/20 bg-red/10 text-red"
-                                  : m.tone === "orange"
-                                  ? "border-orange/20 bg-orange/10 text-orange"
-                                  : "border-yellow/20 bg-yellow/10 text-yellow"
-                              }`}
-                            >
-                              {m.label}
-                            </span>
-                          )}
-
-                          {src && (
-                            <span className="text-[11px] text-muted bg-soft px-1.5 py-0.5 rounded-[3px]">
-                              {src.name}
-                            </span>
-                          )}
-
-                          {q.answerKey && (
-                            <span className="text-[11px] text-muted">
-                              Ans: {q.answerKey}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
           </div>
         )}
 
@@ -700,7 +568,6 @@ export function ExportModal({
                   { key: "showChapter", label: "Chapter" },
                   { key: "showMistake", label: "Mistake Type" },
                   { key: "showSource", label: "Source" },
-                  { key: "showAnswerKey", label: "Answer Key" },
                 ].map(({ key, label }) => {
                   const isChecked = metadata[key as keyof MetadataOptions];
                   return (
@@ -728,6 +595,28 @@ export function ExportModal({
                     </button>
                   );
                 })}
+              </div>
+            </div>
+
+            {/* Answers toggle */}
+            <div className="space-y-3.5 pt-1">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-[14px] font-semibold text-fg">
+                    Include answers
+                  </h3>
+                  <p className="text-[13px] text-muted mt-0.5">
+                    Render answer texts below each question.
+                  </p>
+                </div>
+
+                <div className="shrink-0">
+                  <Toggle
+                    checked={showAnswers}
+                    onChange={(v) => setShowAnswers(v)}
+                    label="Include answers below each question"
+                  />
+                </div>
               </div>
             </div>
 

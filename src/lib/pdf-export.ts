@@ -1,7 +1,7 @@
 import { jsPDF } from "jspdf";
 import type { Question, Source } from "./model";
 import { mistakeById } from "./model";
-import { chapterById, subjectOfChapter } from "./syllabus";
+import { chapterById, subjectById, subjectOfChapter } from "./syllabus";
 
 export type ColumnFormat = "1" | "2";
 
@@ -10,7 +10,7 @@ export type MetadataOptions = {
   showChapter: boolean;
   showMistake: boolean;
   showSource: boolean;
-  showAnswerKey: boolean;
+  showAnswerKey?: boolean;
 };
 
 export type ExportProgress = {
@@ -186,6 +186,7 @@ export type GeneratePdfOptions = {
   sources: Source[];
   columnFormat: ColumnFormat;
   metadata: MetadataOptions;
+  showAnswers?: boolean;
   inversions: Record<string, boolean>; // questionId -> invert
   onProgress: (p: ExportProgress) => void;
 };
@@ -194,7 +195,8 @@ export type GeneratePdfOptions = {
  * Client-side PDF generation using jsPDF with newspaper 2-column or 1-column layout.
  */
 export async function generateContinuousPdf(options: GeneratePdfOptions): Promise<Blob> {
-  const { questions, sources, columnFormat, metadata, inversions, onProgress } = options;
+  const { questions, sources, columnFormat, metadata, showAnswers, inversions, onProgress } = options;
+  const shouldShowAnswers = showAnswers ?? metadata.showAnswerKey ?? false;
   const total = questions.length;
 
   if (total === 0) {
@@ -280,32 +282,48 @@ export async function generateContinuousPdf(options: GeneratePdfOptions): Promis
     metadata.showSubject ||
     metadata.showChapter ||
     metadata.showMistake ||
-    metadata.showSource ||
-    metadata.showAnswerKey;
+    metadata.showSource;
 
   for (let i = 0; i < processedList.length; i++) {
     const item = processedList[i];
     const { question, dataUrl, width: imgW, height: imgH } = item;
 
+    // Check if question has an answer to display
+    const hasAnswer =
+      shouldShowAnswers &&
+      typeof question.answerKey === "string" &&
+      question.answerKey.trim().length > 0;
+
     // Calculate metadata badges height
     const headerHeight = hasMetadata ? 6.5 : 0;
     const separationHeight = 6.5; // space + line + space
+
+    let answerBlockHeight = 0;
+    let answerLines: string[] = [];
+    if (hasAnswer) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      const ansFullText = `Answer: ${question.answerKey.trim()}`;
+      answerLines = doc.splitTextToSize(ansFullText, colWidth - 6);
+      const lineH = 3.8;
+      answerBlockHeight = 2 + (answerLines.length * lineH + 2.5);
+    }
 
     // Calculate rendered image dimensions preserving aspect ratio
     const aspect = imgH / (imgW || 1);
     let renderedW = colWidth;
     let renderedH = renderedW * aspect;
 
-    // Safety constraint: If a single image is taller than the entire printable page,
+    // Safety constraint: If a single image + header + answer is taller than the entire printable page,
     // proportionally scale it down so it fits completely on one page
-    const maxItemContentH = usableHeight - headerHeight - separationHeight;
+    const maxItemContentH = usableHeight - headerHeight - answerBlockHeight - separationHeight;
     if (renderedH > maxItemContentH) {
       const scale = maxItemContentH / renderedH;
       renderedH = maxItemContentH;
       renderedW = renderedW * scale;
     }
 
-    const totalItemH = headerHeight + renderedH + separationHeight;
+    const totalItemH = headerHeight + renderedH + answerBlockHeight + separationHeight;
 
     // Check if item fits in current column
     if (currentY + totalItemH > pageHeight - marginBottom) {
@@ -332,8 +350,10 @@ export async function generateContinuousPdf(options: GeneratePdfOptions): Promis
 
       // Subject badge
       if (metadata.showSubject) {
-        const sub = subjectOfChapter(question.chapterId);
-        const subName = sub?.name || "Subject";
+        const sub =
+          subjectOfChapter(question.chapterId) ??
+          (question.subjectId ? subjectById(question.subjectId) : undefined);
+        const subName = sub?.name || (question.chapterId ? "Subject" : "Untagged");
         doc.setFontSize(7.5);
         const textW = doc.getTextWidth(subName);
         const pillW = textW + 4;
@@ -416,19 +436,6 @@ export async function generateContinuousPdf(options: GeneratePdfOptions): Promis
         }
       }
 
-      // Answer key badge
-      if (metadata.showAnswerKey && question.answerKey) {
-        doc.setFontSize(7);
-        const ansText = `Ans: ${question.answerKey}`;
-        const textW = doc.getTextWidth(ansText);
-        const pillW = textW + 4;
-
-        doc.setFillColor(238, 242, 255);
-        doc.roundedRect(badgeX, badgeY, pillW, 4.2, 1, 1, "F");
-        doc.setTextColor(67, 56, 202);
-        doc.text(ansText, badgeX + 2, badgeY + 3.1);
-      }
-
       currentY += headerHeight;
     }
 
@@ -437,7 +444,55 @@ export async function generateContinuousPdf(options: GeneratePdfOptions): Promis
     doc.addImage(dataUrl, "JPEG", imgX, currentY, renderedW, renderedH, undefined, "FAST");
     currentY += renderedH;
 
-    // 3. Draw Thin Separation Line
+    // 3. Draw Answer Text Below Question Image (if toggled)
+    if (hasAnswer && answerLines.length > 0) {
+      currentY += 2;
+      const lineH = 3.8;
+      const badgeH = answerLines.length * lineH + 2.5;
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+
+      const maxTextLineWidth = Math.max(...answerLines.map((l: string) => doc.getTextWidth(l)));
+      const badgeW =
+        answerLines.length === 1 ? Math.min(colWidth, maxTextLineWidth + 6) : colWidth;
+
+      // Soft indigo-tinted badge below the question
+      doc.setFillColor(238, 242, 255); // #EEF2FF
+      doc.setDrawColor(224, 231, 255); // #E0E7FF
+      doc.setLineWidth(0.2);
+      doc.roundedRect(currentX, currentY, badgeW, badgeH, 1, 1, "FD");
+
+      const prefix = "Answer: ";
+      let textY = currentY + 3.4;
+
+      for (let l = 0; l < answerLines.length; l++) {
+        const line = answerLines[l];
+        if (l === 0 && line.startsWith(prefix)) {
+          // Bold "Answer: " prefix in indigo-700
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(67, 56, 202); // #4338CA
+          doc.text(prefix, currentX + 3, textY);
+
+          // Value in deep indigo-950
+          const rest = line.slice(prefix.length);
+          if (rest) {
+            doc.setFont("helvetica", "bold");
+            doc.setTextColor(30, 27, 75); // #1E1B4B
+            doc.text(rest, currentX + 3 + doc.getTextWidth(prefix), textY);
+          }
+        } else {
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(30, 27, 75);
+          doc.text(line, currentX + 3, textY);
+        }
+        textY += lineH;
+      }
+
+      currentY += badgeH;
+    }
+
+    // 4. Draw Thin Separation Line
     currentY += 2.5;
     doc.setDrawColor(229, 231, 235); // line-gray #E5E7EB
     doc.setLineWidth(0.2);

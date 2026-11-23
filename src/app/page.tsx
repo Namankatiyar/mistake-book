@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Atom } from "loading-dev";
 import { ShieldCheck, FileText, FileDown } from "lucide-react";
-import { useCapture } from "@/components/capture";
+import { useCapture, useRegisterActiveFilters } from "@/components/capture";
 import { ExportModal } from "@/components/export-modal";
 import { QuestionCard } from "@/components/question-card";
 import {
@@ -82,6 +82,24 @@ export default function ListPage() {
     }
   }, [syllabus, state.subjectId, setState]);
 
+  const activeFilters = useMemo(() => {
+    const chapterId = state.chapterId || null;
+    const subjectId =
+      state.subjectId || (chapterId ? subjectOfChapter(chapterId)?.id ?? null : null);
+    const mistakeId =
+      state.mistake !== "all" && state.mistake !== "none" ? state.mistake : null;
+    const sourceId =
+      state.source !== "all" && state.source !== "none" ? state.source : null;
+    return {
+      subjectId,
+      chapterId,
+      mistakeId,
+      sourceId,
+    };
+  }, [state.chapterId, state.subjectId, state.mistake, state.source]);
+
+  useRegisterActiveFilters(activeFilters);
+
   const counts = useMemo(() => {
     const activeSubjectIds = new Set(syllabus.map((s) => s.id));
     const bySubject = new Map<string, number>();
@@ -89,11 +107,15 @@ export default function ListPage() {
     let total = 0;
     for (const q of questions) {
       if (q.stashed) continue;
-      if (activeSubjectIds.has(q.subjectId)) {
+      if (!q.subjectId || activeSubjectIds.has(q.subjectId)) {
         total += 1;
       }
-      bySubject.set(q.subjectId, (bySubject.get(q.subjectId) ?? 0) + 1);
-      byChapter.set(q.chapterId, (byChapter.get(q.chapterId) ?? 0) + 1);
+      if (q.subjectId) {
+        bySubject.set(q.subjectId, (bySubject.get(q.subjectId) ?? 0) + 1);
+      }
+      if (q.chapterId) {
+        byChapter.set(q.chapterId, (byChapter.get(q.chapterId) ?? 0) + 1);
+      }
     }
     return { bySubject, byChapter, total };
   }, [questions, syllabus]);
@@ -112,7 +134,7 @@ export default function ListPage() {
       list = list.filter((q) => q.subjectId === state.subjectId);
     } else {
       const activeSubjectIds = new Set(syllabus.map((s) => s.id));
-      list = list.filter((q) => activeSubjectIds.has(q.subjectId));
+      list = list.filter((q) => !q.subjectId || activeSubjectIds.has(q.subjectId));
     }
     if (state.mistake === "none") {
       list = list.filter((q) => !q.mistakeId);
@@ -231,9 +253,16 @@ export default function ListPage() {
             );
           })}
         </div>
-        <div className="mt-6 rounded-[8px] border border-line bg-surface/50 p-3 text-[12px] leading-relaxed text-muted">
-          You can directly drag and drop images onto here or press{" "}
-          <Kbd>Ctrl + V</Kbd> to add mistakes
+        <div className="mt-6 rounded-[8px] border border-line bg-surface/50 p-3 text-[12px] leading-[26px] text-muted">
+          Press{" "}
+          <span className="inline-flex items-center gap-1 whitespace-nowrap">
+            <Kbd>Ctrl</Kbd> + <Kbd>V</Kbd>
+          </span>{" "}
+          to stage a draft, or{" "}
+          <span className="inline-flex items-center gap-1 whitespace-nowrap">
+            <Kbd>Ctrl</Kbd> + <Kbd>Shift</Kbd> + <Kbd>V</Kbd>
+          </span>{" "}
+          to save instantly with active filters.
         </div>
 
         <div className="mt-4 border-t border-line/70 py-3">
@@ -267,7 +296,7 @@ export default function ListPage() {
             <span className="flex-1">Terms of Service</span>
           </Link>
           <div className="px-1.5 pt-2 text-[11px] text-muted">
-            &copy; {new Date().getFullYear()} ojeet tools
+            &copy; {new Date().getFullYear()} OJEET Tools
           </div>
         </div>
       </aside>
@@ -408,16 +437,15 @@ export default function ListPage() {
               </p>
               <div className="mt-5 space-y-2.5 text-[14px]">
                 <p className="flex flex-wrap items-center gap-1.5">
-                  <Kbd>Ctrl</Kbd>+<Kbd>V</Kbd>
+                  <Kbd>Ctrl</Kbd> + <Kbd>V</Kbd>
                   <span className="text-muted">
                     stages a draft — Enter saves, several pastes queue up
                   </span>
                 </p>
                 <p className="flex flex-wrap items-center gap-1.5">
-                  <Kbd>Ctrl</Kbd>+<Kbd>Shift</Kbd>+<Kbd>V</Kbd>
+                  <Kbd>Ctrl</Kbd> + <Kbd>Shift</Kbd> + <Kbd>V</Kbd>
                   <span className="text-muted">
-                    saves instantly into the current subject, chapter and
-                    source
+                    saves instantly inheriting active filters (or untagged if no filter)
                   </span>
                 </p>
                 <p className="text-muted">
@@ -463,7 +491,7 @@ export default function ListPage() {
         </div>
 
         <footer className="mt-8 border-t border-line pt-4 pb-10 flex flex-wrap items-center justify-between gap-3 text-[12px] text-muted lg:hidden">
-          <span>&copy; {new Date().getFullYear()} ojeet tools</span>
+          <span>&copy; {new Date().getFullYear()} OJEET Tools</span>
           <div className="flex items-center gap-4">
             <button
               type="button"

@@ -293,13 +293,15 @@ function ViewerQuestion({
                   ·
                 </span>
               )}
-              {(chapter?.name || subject?.name) && (
+              {chapter?.name || subject?.name ? (
                 <span className="truncate">
                   {chapter?.name}
                   {chapter?.name && subject?.name ? " · " : ""}
                   {subject?.name}
                 </span>
-              )}
+              ) : !mistake && !source ? (
+                <span className="truncate text-muted italic">Untagged</span>
+              ) : null}
               {source && <SourceChip name={source.name} />}
             </div>
           )}
@@ -319,7 +321,7 @@ function ViewerQuestion({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={url}
-              alt={`Question — ${chapter?.name ?? "chapter"}`}
+              alt={`Question — ${chapter?.name ?? subject?.name ?? "question"}`}
               className="block h-auto w-auto max-h-full max-w-full object-contain select-none rounded-md"
               style={{
                 maxHeight: "100%",
