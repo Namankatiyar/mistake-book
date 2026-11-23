@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Atom } from "loading-dev";
-import { ShieldCheck, FileText } from "lucide-react";
+import { ShieldCheck, FileText, FileDown } from "lucide-react";
 import { useCapture } from "@/components/capture";
+import { ExportModal } from "@/components/export-modal";
 import { QuestionCard } from "@/components/question-card";
 import {
   Button,
@@ -64,6 +65,7 @@ export default function ListPage() {
   const handleAddQuestions = openModal || openPicker;
   const router = useRouter();
   const [state, setState] = useSessionState<ListState>("mb.listState", INITIAL);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const syllabus = useMemo(
     () => getSyllabus(settings.examMode),
@@ -234,7 +236,19 @@ export default function ListPage() {
           <Kbd>Ctrl + V</Kbd> to add mistakes
         </div>
 
-        <div className="mt-5 border-t border-line/70 pt-3.5 space-y-1">
+        <div className="mt-4 border-t border-line/70 py-3">
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setExportOpen(true)}
+            className="w-full"
+          >
+            <FileDown className="h-3.5 w-3.5 shrink-0" />
+            Export to PDF
+          </Button>
+        </div>
+
+        <div className="border-t border-line/70 pt-3 space-y-1">
           <div className="px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-muted">
             Legal &amp; Privacy
           </div>
@@ -252,6 +266,9 @@ export default function ListPage() {
             <FileText className="h-3.5 w-3.5 shrink-0" />
             <span className="flex-1">Terms of Service</span>
           </Link>
+          <div className="px-1.5 pt-2 text-[11px] text-muted">
+            &copy; {new Date().getFullYear()} ojeet tools
+          </div>
         </div>
       </aside>
 
@@ -446,8 +463,16 @@ export default function ListPage() {
         </div>
 
         <footer className="mt-8 border-t border-line pt-4 pb-10 flex flex-wrap items-center justify-between gap-3 text-[12px] text-muted lg:hidden">
-          <span>Mistake book</span>
+          <span>&copy; {new Date().getFullYear()} ojeet tools</span>
           <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => setExportOpen(true)}
+              className="text-muted hover:text-fg underline underline-offset-4 flex items-center gap-1.5"
+            >
+              <FileDown className="h-3.5 w-3.5" />
+              Export to PDF
+            </button>
             <Link
               href="/privacy"
               className="text-muted hover:text-fg underline underline-offset-4"
@@ -463,6 +488,16 @@ export default function ListPage() {
           </div>
         </footer>
       </main>
+
+      <ExportModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        initialSubjectId={state.subjectId}
+        initialChapterId={state.chapterId}
+        initialMistake={state.mistake}
+        initialSource={state.source}
+        initialStash={state.stash}
+      />
     </div>
   );
 }
