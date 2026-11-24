@@ -14,6 +14,22 @@ export type SqliteInstance = {
   db: SqliteDatabase;
 };
 
+// Strict FIFO async mutex to ensure non-reentrant SQLite WASM statements never interleave
+class AsyncMutex {
+  private queue: Promise<unknown> = Promise.resolve();
+
+  run<T>(fn: () => Promise<T>): Promise<T> {
+    const res = this.queue.then(fn, fn);
+    this.queue = res.then(
+      () => {},
+      () => {}
+    );
+    return res;
+  }
+}
+
+const dbMutex = new AsyncMutex();
+
 let instancePromise: Promise<SqliteInstance> | null = null;
 
 const MIGRATION_KEY = "sqlite_migrated_v1";
@@ -54,10 +70,46 @@ function mapRowToQuestion(row: schema.DbQuestion): Question {
   };
 }
 
+async function checkIndexedDbExists(dbName: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    let existed = true;
+    let req: IDBOpenDBRequest;
+    try {
+      req = indexedDB.open(dbName);
+    } catch {
+      resolve(false);
+      return;
+    }
+
+    req.onupgradeneeded = (event) => {
+      // oldVersion 0 indicates the database did not exist prior to this call
+      if (event.oldVersion === 0) {
+        existed = false;
+        try {
+          req.transaction?.abort();
+        } catch {
+          // ignore abort error
+        }
+      }
+    };
+
+    req.onsuccess = () => {
+      try {
+        req.result.close();
+      } catch {}
+      resolve(existed);
+    };
+
+    req.onerror = () => {
+      resolve(false);
+    };
+  });
+}
+
 async function checkLegacyPgliteExists(): Promise<boolean> {
-  if (typeof window === "undefined") return false;
+  if (typeof window === "undefined" || typeof indexedDB === "undefined") return false;
   try {
-    if (typeof indexedDB !== "undefined" && typeof indexedDB.databases === "function") {
+    if (typeof indexedDB.databases === "function") {
       const dbs = await indexedDB.databases();
       return dbs.some(
         (db) =>
@@ -65,10 +117,17 @@ async function checkLegacyPgliteExists(): Promise<boolean> {
           (db.name.includes("mistake-book-db") || db.name.includes("/pglite/mistake-book-db"))
       );
     }
+
+    // Graceful fallback for browsers where indexedDB.databases is not available (e.g. Firefox)
+    const [exists1, exists2] = await Promise.all([
+      checkIndexedDbExists("/pglite/mistake-book-db"),
+      checkIndexedDbExists("mistake-book-db"),
+    ]);
+    return exists1 || exists2;
   } catch (e) {
     console.warn("[Migration] Could not inspect indexedDB databases:", e);
+    return false;
   }
-  return false;
 }
 
 async function migrateLegacyPgliteData(
@@ -154,7 +213,7 @@ async function migrateLegacyPgliteData(
     );
 
     // Copy to SQLite in a transaction
-    await sqlite3.exec(rawDb, "BEGIN TRANSACTION;");
+    await dbMutex.run(() => sqlite3.exec(rawDb, "BEGIN TRANSACTION;"));
     try {
       // Insert sources
       for (const s of sourcesRes.rows) {
@@ -231,9 +290,9 @@ async function migrateLegacyPgliteData(
           .onConflictDoNothing();
       }
 
-      await sqlite3.exec(rawDb, "COMMIT;");
+      await dbMutex.run(() => sqlite3.exec(rawDb, "COMMIT;"));
     } catch (txErr) {
-      await sqlite3.exec(rawDb, "ROLLBACK;");
+      await dbMutex.run(() => sqlite3.exec(rawDb, "ROLLBACK;"));
       throw txErr;
     }
 
@@ -341,52 +400,54 @@ export async function getDb(): Promise<SqliteInstance> {
       `
       );
 
-      // Drizzle adapter using sqlite-proxy
+      // Drizzle adapter using sqlite-proxy with strict FIFO AsyncMutex
       const db = drizzle(
-        async (sql: string, params: any[], method: "run" | "all" | "values" | "get") => {
-          // Normalize boolean parameters to integers for SQLite
-          const normalizedParams = params?.map((p) => {
-            if (typeof p === "boolean") {
-              return p ? 1 : 0;
+        (sql: string, params: any[], method: "run" | "all" | "values" | "get") => {
+          return dbMutex.run(async () => {
+            // Normalize boolean parameters to integers for SQLite
+            const normalizedParams = params?.map((p) => {
+              if (typeof p === "boolean") {
+                return p ? 1 : 0;
+              }
+              return p;
+            });
+
+            if (method === "run") {
+              for await (const stmt of sqlite3.statements(rawDb, sql)) {
+                if (normalizedParams && normalizedParams.length > 0) {
+                  sqlite3.bind_collection(stmt, normalizedParams);
+                }
+                await sqlite3.step(stmt);
+              }
+              return { rows: [] };
             }
-            return p;
+
+            if (method === "get") {
+              let row: any = undefined;
+              for await (const stmt of sqlite3.statements(rawDb, sql)) {
+                if (normalizedParams && normalizedParams.length > 0) {
+                  sqlite3.bind_collection(stmt, normalizedParams);
+                }
+                const rc = await sqlite3.step(stmt);
+                if (rc === SQLite.SQLITE_ROW) {
+                  row = sqlite3.row(stmt);
+                }
+              }
+              return { rows: row };
+            }
+
+            // method === "all" or "values"
+            const rows: any[] = [];
+            for await (const stmt of sqlite3.statements(rawDb, sql)) {
+              if (normalizedParams && normalizedParams.length > 0) {
+                sqlite3.bind_collection(stmt, normalizedParams);
+              }
+              while ((await sqlite3.step(stmt)) === SQLite.SQLITE_ROW) {
+                rows.push(sqlite3.row(stmt));
+              }
+            }
+            return { rows };
           });
-
-          if (method === "run") {
-            for await (const stmt of sqlite3.statements(rawDb, sql)) {
-              if (normalizedParams && normalizedParams.length > 0) {
-                sqlite3.bind_collection(stmt, normalizedParams);
-              }
-              await sqlite3.step(stmt);
-            }
-            return { rows: [] };
-          }
-
-          if (method === "get") {
-            let row: any = undefined;
-            for await (const stmt of sqlite3.statements(rawDb, sql)) {
-              if (normalizedParams && normalizedParams.length > 0) {
-                sqlite3.bind_collection(stmt, normalizedParams);
-              }
-              const rc = await sqlite3.step(stmt);
-              if (rc === SQLite.SQLITE_ROW) {
-                row = sqlite3.row(stmt);
-              }
-            }
-            return { rows: row };
-          }
-
-          // method === "all" or "values"
-          const rows: any[] = [];
-          for await (const stmt of sqlite3.statements(rawDb, sql)) {
-            if (normalizedParams && normalizedParams.length > 0) {
-              sqlite3.bind_collection(stmt, normalizedParams);
-            }
-            while ((await sqlite3.step(stmt)) === SQLite.SQLITE_ROW) {
-              rows.push(sqlite3.row(stmt));
-            }
-          }
-          return { rows };
         },
         { schema }
       );
@@ -395,7 +456,11 @@ export async function getDb(): Promise<SqliteInstance> {
       await migrateLegacyPgliteData(db, sqlite3, rawDb);
 
       return { sqlite3, rawDb, db };
-    })();
+    })().catch((err) => {
+      // Prevent permanently poisoning singleton on transient failure
+      instancePromise = null;
+      throw err;
+    });
   }
 
   return instancePromise;
