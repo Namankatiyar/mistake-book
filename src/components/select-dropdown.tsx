@@ -56,6 +56,7 @@ export interface SearchableChapterSelectProps {
   value?: string | null;
   onChange?: (chapterId: string, subjectId?: string) => void;
   subjectId?: string | null; // Filter to specific subject (e.g. "phy", "chem", "math"), or null for all
+  subjectIds?: string[] | null; // Filter to multiple subjects, or empty for none
   allowAllSubjects?: boolean; // When true, allows searching across all subjects even if subjectId is provided
   allOptionLabel?: string; // Optional label for an "All chapters" option (e.g. value "")
   placeholder?: string;
@@ -432,7 +433,7 @@ export function SelectDropdown({
             role="listbox"
             tabIndex={-1}
             style={{ opacity: 0, pointerEvents: "none" }}
-            className={`dropdown-menu fixed z-50 flex flex-col rounded-[8px] border border-line bg-surface text-fg shadow-lg shadow-black/8 dark:shadow-black/40 overflow-hidden ${menuClassName}`}
+            className={`dropdown-menu fixed z-[60] flex flex-col rounded-[8px] border border-line bg-surface text-fg shadow-lg shadow-black/8 dark:shadow-black/40 overflow-hidden ${menuClassName}`}
             onKeyDown={handleKeyDown}
           >
             <div
@@ -550,6 +551,7 @@ export function SearchableChapterSelect({
   value,
   onChange,
   subjectId,
+  subjectIds,
   allowAllSubjects = false,
   allOptionLabel,
   placeholder = "Search chapter...",
@@ -583,14 +585,16 @@ export function SearchableChapterSelect({
 
   const selectedSubject = useMemo(() => {
     if (!selectedChapter) {
-      return subjectId ? subjectById(subjectId) : null;
+      if (subjectId) return subjectById(subjectId);
+      if (subjectIds && subjectIds.length === 1) return subjectById(subjectIds[0]);
+      return null;
     }
     return (
       syllabus.find((s) =>
         s.chapters.some((c) => c.id === selectedChapter.id),
       ) ?? subjectOfChapter(selectedChapter.id)
     );
-  }, [selectedChapter, subjectId, syllabus]);
+  }, [selectedChapter, subjectId, subjectIds, syllabus]);
 
   // Build the list of chapters to display
   const chaptersList = useMemo<{
@@ -601,7 +605,17 @@ export function SearchableChapterSelect({
     const list: { chapter: Chapter; subjectId: string; subjectName: string }[] =
       [];
 
-    if (subjectId && !allowAllSubjects) {
+    if (subjectIds && !allowAllSubjects) {
+      if (subjectIds.length === 0) return [];
+      const subSet = new Set(subjectIds);
+      syllabus.forEach((s) => {
+        if (subSet.has(s.id)) {
+          s.chapters.forEach((c) => {
+            list.push({ chapter: c, subjectId: s.id, subjectName: s.name });
+          });
+        }
+      });
+    } else if (subjectId && !allowAllSubjects) {
       const s = subjectById(subjectId);
       if (s) {
         s.chapters.forEach((c) => {
@@ -617,7 +631,7 @@ export function SearchableChapterSelect({
       });
     }
     return list;
-  }, [subjectId, allowAllSubjects, syllabus]);
+  }, [subjectId, subjectIds, allowAllSubjects, syllabus]);
 
   // Filter chapters based on search query
   const filteredChapters = useMemo(() => {
@@ -847,7 +861,7 @@ export function SearchableChapterSelect({
             role="listbox"
             tabIndex={-1}
             style={{ opacity: 0, pointerEvents: "none" }}
-            className={`dropdown-menu fixed z-50 flex flex-col rounded-[8px] border border-line bg-surface text-fg shadow-lg shadow-black/8 dark:shadow-black/40 overflow-hidden ${menuClassName}`}
+            className={`dropdown-menu fixed z-[60] flex flex-col rounded-[8px] border border-line bg-surface text-fg shadow-lg shadow-black/8 dark:shadow-black/40 overflow-hidden ${menuClassName}`}
             onKeyDown={handleKeyDown}
           >
             {/* Embedded Search Header */}

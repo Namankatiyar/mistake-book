@@ -1,6 +1,6 @@
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, inArray, count } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import { newId, type Question, type Source } from "./model";
 
@@ -158,6 +158,55 @@ export async function loadAll(): Promise<{
   return { questions, sources };
 }
 
+export async function loadQuestionsPaginated({
+  page = 1,
+  pageSize = 30,
+}: {
+  page?: number;
+  pageSize?: number;
+} = {}): Promise<{
+  questions: Question[];
+  total: number;
+  sources: Source[];
+}> {
+  if (!isBrowser()) return { questions: [], total: 0, sources: [] };
+  const { db } = await getDb();
+  const offset = Math.max(0, (page - 1) * pageSize);
+
+  const [qRows, countRows, sRows] = await Promise.all([
+    db
+      .select()
+      .from(schema.questions)
+      .where(eq(schema.questions.isDeleted, false))
+      .orderBy(desc(schema.questions.createdAt))
+      .limit(pageSize)
+      .offset(offset),
+    db
+      .select({ count: count() })
+      .from(schema.questions)
+      .where(eq(schema.questions.isDeleted, false)),
+    db
+      .select()
+      .from(schema.sources)
+      .where(eq(schema.sources.isDeleted, false)),
+  ]);
+
+  const questions = qRows.map(mapRowToQuestion);
+  const total = Number(countRows[0]?.count ?? 0);
+  const sources = sRows
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      createdAt: Number(r.createdAt),
+      updatedAt: Number(r.updatedAt ?? r.createdAt),
+      syncedAt: r.syncedAt != null ? Number(r.syncedAt) : null,
+      isDeleted: Boolean(r.isDeleted),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  return { questions, total, sources };
+}
+
 export async function putQuestion(q: Question): Promise<void> {
   const { db } = await getDb();
   const imageBytes = await blobToUint8Array(q.image);
@@ -277,4 +326,34 @@ export async function enqueueSyncItem(
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("mb:sync-enqueue"));
   }
+}
+
+export async function getQuestionImageFromDb(id: string): Promise<Blob | null> {
+  if (!isBrowser()) return null;
+  const { db } = await getDb();
+  const rows = await db
+    .select({ image: schema.questions.image })
+    .from(schema.questions)
+    .where(eq(schema.questions.id, id))
+    .limit(1);
+
+  if (rows.length === 0 || !rows[0].image) return null;
+  return uint8ArrayToBlob(rows[0].image);
+}
+
+export async function getQuestionImagesFromDb(ids: string[]): Promise<Map<string, Blob>> {
+  if (!isBrowser() || ids.length === 0) return new Map();
+  const { db } = await getDb();
+  const rows = await db
+    .select({ id: schema.questions.id, image: schema.questions.image })
+    .from(schema.questions)
+    .where(inArray(schema.questions.id, ids));
+
+  const result = new Map<string, Blob>();
+  for (const row of rows) {
+    if (row.image) {
+      result.set(row.id, uint8ArrayToBlob(row.image));
+    }
+  }
+  return result;
 }

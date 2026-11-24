@@ -13,6 +13,7 @@ import {
 import {
   enqueueSyncItem,
   loadAll,
+  loadQuestionsPaginated,
   putQuestion,
   putQuestions,
   putSource,
@@ -20,6 +21,7 @@ import {
   removeSource,
 } from "./idb";
 import { newId, todayKey, type Question, type Source } from "./model";
+import { evictImage } from "./image-cache";
 import { useToast } from "./toast";
 
 export type NewQuestion = {
@@ -32,9 +34,17 @@ export type NewQuestion = {
   note: string;
 };
 
-type LibraryContextValue = {
+export type LibraryContextValue = {
   ready: boolean;
   questions: Question[];
+  allQuestions: Question[];
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  totalQuestions: number;
+  setPage: (page: number | ((prev: number) => number)) => void;
+  nextPage: () => void;
+  prevPage: () => void;
   sources: Source[];
   addQuestion: (input: NewQuestion) => Promise<Question | null>;
   updateQuestion: (id: string, patch: Partial<Question>) => Promise<void>;
@@ -56,6 +66,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(1);
+  const pageSize = 30;
+
   const questionsRef = useRef<Question[]>(questions);
   questionsRef.current = questions;
   const pendingDeleteIdsRef = useRef<Set<string>>(pendingDeleteIds);
@@ -83,25 +96,32 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    const reload = () => {
-      loadAll()
-        .then((data) => {
+    const reload = async () => {
+      try {
+        // Fast initial fetch: load first 30 questions and sources to get ready immediately
+        const initialData = await loadQuestionsPaginated({ page: 1, pageSize: 30 });
+        if (cancelled) return;
+        setQuestions(initialData.questions);
+        setSources(initialData.sources);
+        setReady(true);
+
+        // If there are more questions, load remaining questions in background so allQuestions has complete dataset
+        if (initialData.total > 30) {
+          const fullData = await loadAll();
           if (cancelled) return;
-          setQuestions(data.questions);
-          setSources(data.sources);
-          setReady(true);
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setReady(true);
-          push("Couldn't open local storage in this browser");
-        });
+          setQuestions(fullData.questions);
+        }
+      } catch {
+        if (cancelled) return;
+        setReady(true);
+        push("Couldn't open local storage in this browser");
+      }
     };
 
-    reload();
+    void reload();
 
     const handleReload = () => {
-      reload();
+      void reload();
     };
     window.addEventListener("mb:library-reload", handleReload);
 
@@ -187,6 +207,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         push("Couldn't delete question");
         return;
       } finally {
+        evictImage(id);
         setQuestions((prev) => prev.filter((q) => q.id !== id));
         setPendingDeleteIds((prev) => {
           const next = new Set(prev);
@@ -292,10 +313,35 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     return questions.filter((q) => !pendingDeleteIds.has(q.id));
   }, [questions, pendingDeleteIds]);
 
+  const totalQuestions = visibleQuestions.length;
+  const totalPages = Math.max(1, Math.ceil(totalQuestions / pageSize));
+
+  const paginatedQuestions = useMemo(() => {
+    const safePage = Math.min(Math.max(1, page), totalPages);
+    const start = (safePage - 1) * pageSize;
+    return visibleQuestions.slice(start, start + pageSize);
+  }, [visibleQuestions, page, totalPages, pageSize]);
+
+  const nextPage = useCallback(() => {
+    setPage((p) => Math.min(totalPages, p + 1));
+  }, [totalPages]);
+
+  const prevPage = useCallback(() => {
+    setPage((p) => Math.max(1, p - 1));
+  }, []);
+
   const value = useMemo(
     () => ({
       ready,
-      questions: visibleQuestions,
+      questions: paginatedQuestions,
+      allQuestions: visibleQuestions,
+      page,
+      pageSize,
+      totalPages,
+      totalQuestions,
+      setPage,
+      nextPage,
+      prevPage,
       sources,
       addQuestion,
       updateQuestion,
@@ -310,7 +356,14 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     }),
     [
       ready,
+      paginatedQuestions,
       visibleQuestions,
+      page,
+      pageSize,
+      totalPages,
+      totalQuestions,
+      nextPage,
+      prevPage,
       sources,
       addQuestion,
       updateQuestion,

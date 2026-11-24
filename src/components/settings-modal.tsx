@@ -114,7 +114,8 @@ export function SettingsModal({
   onClose: () => void;
 }) {
   const { settings, update } = useSettings();
-  const { sources, questions, addSource, deleteSource } = useLibrary();
+  const { sources, questions, allQuestions, addSource, deleteSource } = useLibrary();
+  const allLibraryQuestions = allQuestions && allQuestions.length > 0 ? allQuestions : questions;
   const {
     syncProgress,
     syncNow,
@@ -167,7 +168,7 @@ export function SettingsModal({
   };
 
   const usage = (id: string) =>
-    questions.filter((q) => q.sourceId === id).length;
+    allLibraryQuestions.filter((q) => q.sourceId === id).length;
 
   const create = async () => {
     const trimmed = name.trim();
