@@ -19,7 +19,11 @@ import {
   Tooltip,
 } from "@/components/ui";
 import { checkAttempt } from "@/lib/answer";
-import { useObjectUrl } from "@/lib/hooks";
+import {
+  getCachedImageUrl,
+  preloadQuestionImages,
+  useQuestionImage,
+} from "@/lib/image-cache";
 import { useLibrary } from "@/lib/library";
 import {
   VIEWER_ORDER_KEY,
@@ -53,7 +57,8 @@ export default function ViewerPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const router = useRouter();
-  const { ready, questions } = useLibrary();
+  const { ready, questions, allQuestions } = useLibrary();
+  const allLibraryQuestions = allQuestions && allQuestions.length > 0 ? allQuestions : questions;
 
   // The order is frozen at entry and kept until you return to the list.
   const order = useSyncExternalStore(
@@ -64,13 +69,13 @@ export default function ViewerPage() {
 
   const ids = useMemo(() => {
     if (!ready || order === null) return null;
-    const existing = new Set(questions.map((q) => q.id));
+    const existing = new Set(allLibraryQuestions.map((q) => q.id));
     let list = order.filter((x) => existing.has(x));
     if (!list.includes(id)) list = [id];
     return list;
-  }, [ready, order, questions, id]);
+  }, [ready, order, allLibraryQuestions, id]);
 
-  const question = ready ? questions.find((q) => q.id === id) : undefined;
+  const question = ready ? allLibraryQuestions.find((q) => q.id === id) : undefined;
   const index = ids ? ids.indexOf(id) : -1;
   const prevId = ids && index > 0 ? ids[index - 1] : undefined;
   const nextId =
@@ -81,6 +86,32 @@ export default function ViewerPage() {
     [router],
   );
   const back = useCallback(() => router.push("/"), [router]);
+
+  // Preload next 3 questions into memory from DB (and prev question), and prefetch routes
+  useEffect(() => {
+    if (!ids || index === -1) return;
+
+    // Identify next 3 questions in order
+    const next3Ids = ids.slice(index + 1, index + 4);
+    const toPreload = [id, ...(prevId ? [prevId] : []), ...next3Ids];
+
+    if (toPreload.length > 0) {
+      // Prefetch Next.js routes for instant client navigation
+      for (const targetId of toPreload) {
+        if (targetId !== id) {
+          router.prefetch(`/viewer/${targetId}`);
+        }
+      }
+
+      // Preload images into memory from DB
+      const knownBlobs = new Map<string, Blob>();
+      for (const targetId of toPreload) {
+        const found = allLibraryQuestions.find((q) => q.id === targetId);
+        if (found?.image) knownBlobs.set(targetId, found.image);
+      }
+      void preloadQuestionImages(toPreload, knownBlobs);
+    }
+  }, [ids, index, id, prevId, allLibraryQuestions, router]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -140,15 +171,29 @@ export default function ViewerPage() {
     );
   }
 
+  const next3Ids = ids && index >= 0 ? ids.slice(index + 1, index + 4) : [];
+
   return (
-    <ViewerQuestion
-      key={question.id}
-      question={question}
-      prevId={prevId}
-      nextId={nextId}
-      onNavigate={navigate}
-      onBack={back}
-    />
+    <>
+      <ViewerQuestion
+        key={question.id}
+        question={question}
+        prevId={prevId}
+        nextId={nextId}
+        onNavigate={navigate}
+        onBack={back}
+      />
+      {/* Hidden preloaded images keeping the next 3 in browser image cache */}
+      <div className="hidden" aria-hidden="true">
+        {next3Ids.map((nid) => {
+          const cachedUrl = getCachedImageUrl(nid);
+          return cachedUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img key={nid} src={cachedUrl} alt="" />
+          ) : null;
+        })}
+      </div>
+    </>
   );
 }
 
@@ -165,16 +210,15 @@ function ViewerQuestion({
   onNavigate: (id: string) => void;
   onBack: () => void;
 }) {
-  const url = useObjectUrl(question.image);
+  const url = useQuestionImage(question.id, question.image);
   const { updateQuestion, countRevision, sources } = useLibrary();
   const { settings } = useSettings();
   const { push } = useToast();
 
   const [attempt, setAttempt] = useState("");
-  const [phase, setPhase] = useState<"answer" | "result" | "add-key">("answer");
+  const [phase, setPhase] = useState<"answer" | "result">("answer");
   const [correct, setCorrect] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
-  const [keyDraft, setKeyDraft] = useState("");
   const [editing, setEditing] = useState(false);
 
   const mistake = mistakeById(question.mistakeId);
@@ -217,28 +261,25 @@ function ViewerQuestion({
 
   const hasKey = question.answerKey.trim().length > 0;
 
-  const check = () => {
+  const handleSubmit = async () => {
     if (phase !== "answer") return;
+    const val = attempt.trim();
+    if (!val) return;
+
     if (!hasKey) {
-      setPhase("add-key");
+      await updateQuestion(question.id, { answerKey: val });
+      push("Answer key saved");
+      if (nextId) {
+        onNavigate(nextId);
+      } else {
+        setAttempt("");
+        setPhase("answer");
+      }
       return;
     }
-    if (!attempt.trim()) return;
-    setCorrect(checkAttempt(attempt, question.answerKey));
-    setPhase("result");
-  };
 
-  const saveKey = async () => {
-    const k = keyDraft.trim();
-    if (!k) return;
-    await updateQuestion(question.id, { answerKey: k });
-    if (nextId) {
-      onNavigate(nextId);
-    } else {
-      setKeyDraft("");
-      setAttempt("");
-      setPhase("answer");
-    }
+    setCorrect(checkAttempt(val, question.answerKey));
+    setPhase("result");
   };
 
   const saveNote = async () => {
@@ -339,13 +380,15 @@ function ViewerQuestion({
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              check();
+              void handleSubmit();
             }}
           >
             <input
               className="input tnum h-10 transition-colors focus:border-muted focus:outline-none"
-              placeholder="Your answer"
-              aria-label="Your answer"
+              placeholder={
+                hasKey ? "Your answer" : "Enter answer key (option or number)"
+              }
+              aria-label={hasKey ? "Your answer" : "Answer key"}
               value={attempt}
               autoFocus
               disabled={phase === "result"}
@@ -390,38 +433,6 @@ function ViewerQuestion({
                   </Button>
                 </div>
               )}
-            </div>
-          )}
-
-          {phase === "add-key" && (
-            <div className="fade-in flex items-center gap-1.5">
-              <input
-                className="input tnum transition-colors focus:border-muted focus:outline-none"
-                placeholder="Final answer only — option or number"
-                aria-label="Answer key"
-                autoFocus
-                value={keyDraft}
-                onChange={(e) => setKeyDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void saveKey();
-                  } else if (e.key === "Escape") {
-                    e.stopPropagation();
-                    setPhase("answer");
-                  }
-                }}
-              />
-              <Button
-                variant="primary"
-                disabled={!keyDraft.trim()}
-                onClick={() => void saveKey()}
-              >
-                Save key
-              </Button>
-              <Button variant="ghost" onClick={() => setPhase("answer")}>
-                Cancel
-              </Button>
             </div>
           )}
 
@@ -470,10 +481,8 @@ function ViewerQuestion({
                 <Button
                   variant="primary"
                   className="min-w-32"
-                  disabled={
-                    phase !== "answer" || (hasKey && !attempt.trim())
-                  }
-                  onClick={check}
+                  disabled={phase !== "answer" || !attempt.trim()}
+                  onClick={() => void handleSubmit()}
                 >
                   {hasKey ? "Check" : "Add answer key"}
                 </Button>

@@ -15,7 +15,7 @@ import {
   X,
   Moon,
 } from "lucide-react";
-import { Modal, Button, IconButton, SubjectIcon, Toggle } from "@/components/ui";
+import { Modal, Button, IconButton, SubjectIcon, Toggle, SearchableChapterSelect } from "@/components/ui";
 import { useLibrary } from "@/lib/library";
 import { useSettings } from "@/lib/settings";
 import {
@@ -23,7 +23,7 @@ import {
   mistakeById,
   type Question,
 } from "@/lib/model";
-import { getSyllabus, chapterById } from "@/lib/syllabus";
+import { getSyllabus, chapterById, subjectOfChapter } from "@/lib/syllabus";
 import {
   generateContinuousPdf,
   detectDarkMode,
@@ -115,7 +115,8 @@ export function ExportModal({
   initialSource = "all",
   initialStash = "active",
 }: ExportModalProps) {
-  const { questions, sources } = useLibrary();
+  const { questions, allQuestions, sources } = useLibrary();
+  const allLibraryQuestions = allQuestions && allQuestions.length > 0 ? allQuestions : questions;
   const { settings } = useSettings();
   const syllabus = useMemo(() => getSyllabus(settings.examMode), [settings.examMode]);
 
@@ -124,6 +125,7 @@ export function ExportModal({
 
   // Step 1: Filter state
   const [selectedSubjectIds, setSelectedSubjectIds] = useState<string[]>([]);
+  const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
   const [selectedMistakeIds, setSelectedMistakeIds] = useState<string[]>([]);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
 
@@ -170,14 +172,20 @@ export function ExportModal({
       setDarkModeInversionEnabled(true);
       setInversions({});
       setImageAnalysis({});
+      setSelectedChapterId(null);
       return;
     }
 
     // Initialize subject filters
     const activeSubIds = initialSubjectId
       ? [initialSubjectId]
+      : initialChapterId
+      ? ([subjectOfChapter(initialChapterId)?.id ?? syllabus[0]?.id].filter(Boolean) as string[])
       : syllabus.map((s) => s.id);
     setSelectedSubjectIds(activeSubIds);
+
+    // Initialize chapter filter
+    setSelectedChapterId(initialChapterId ?? null);
 
     // Initialize mistake filters
     const activeMistakeIds =
@@ -194,21 +202,32 @@ export function ExportModal({
     setSelectedSourceIds(activeSrcIds);
   }, [open, initialSubjectId, initialChapterId, initialMistake, initialSource, initialStash, syllabus, sources]);
 
-  // Questions filtered by tag pills
+  // If currently selected chapter's subject is deselected, clear chapter filter
+  useEffect(() => {
+    if (selectedChapterId) {
+      const chSub = subjectOfChapter(selectedChapterId)?.id;
+      if (chSub && !selectedSubjectIds.includes(chSub)) {
+        setSelectedChapterId(null);
+      }
+    }
+  }, [selectedSubjectIds, selectedChapterId]);
+
+  // Questions filtered by tag pills and chapter
   const selectedQuestions = useMemo(() => {
     const subSet = new Set(selectedSubjectIds);
     const misSet = new Set(selectedMistakeIds);
     const srcSet = new Set(selectedSourceIds);
 
-    return questions.filter((q) => {
+    return allLibraryQuestions.filter((q) => {
       if (initialStash === "active" && q.stashed) return false;
       if (initialStash === "stashed" && !q.stashed) return false;
       if (!subSet.has(q.subjectId)) return false;
+      if (selectedChapterId && q.chapterId !== selectedChapterId) return false;
       if (q.mistakeId && !misSet.has(q.mistakeId)) return false;
       if (q.sourceId && !srcSet.has(q.sourceId)) return false;
       return true;
     });
-  }, [questions, selectedSubjectIds, selectedMistakeIds, selectedSourceIds, initialStash]);
+  }, [allLibraryQuestions, selectedSubjectIds, selectedChapterId, selectedMistakeIds, selectedSourceIds, initialStash]);
 
   // Run Dark Mode Recognition whenever moving to Step 2
   useEffect(() => {
@@ -417,6 +436,46 @@ export function ExportModal({
                     );
                   })}
                 </div>
+              </div>
+
+              {/* Chapter Combobox Dropdown */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[12px] font-medium text-fg">Chapter</span>
+                  {selectedChapterId && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedChapterId(null)}
+                      className="text-[11px] text-muted hover:text-fg transition-colors cursor-pointer"
+                    >
+                      Clear chapter filter
+                    </button>
+                  )}
+                </div>
+                <SearchableChapterSelect
+                  className="w-full"
+                  value={selectedChapterId ?? ""}
+                  subjectIds={selectedSubjectIds}
+                  allOptionLabel="All chapters"
+                  placeholder={
+                    selectedSubjectIds.length === 0
+                      ? "Select a subject first"
+                      : "All chapters (search or select chapter)..."
+                  }
+                  disabled={selectedSubjectIds.length === 0}
+                  menuClassName="z-[60]"
+                  onChange={(chId, subId) => {
+                    if (!chId) {
+                      setSelectedChapterId(null);
+                    } else {
+                      setSelectedChapterId(chId);
+                      const chSub = subId ?? subjectOfChapter(chId)?.id;
+                      if (chSub && !selectedSubjectIds.includes(chSub)) {
+                        setSelectedSubjectIds((prev) => [...prev, chSub]);
+                      }
+                    }
+                  }}
+                />
               </div>
 
               {/* Mistake Type Tag Pills */}

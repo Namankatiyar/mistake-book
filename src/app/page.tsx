@@ -17,6 +17,7 @@ import {
   SubjectIcon,
 } from "@/components/ui";
 import { useSessionState } from "@/lib/hooks";
+import { preloadQuestionImages } from "@/lib/image-cache";
 import { useLibrary } from "@/lib/library";
 import {
   MISTAKE_TYPES,
@@ -58,14 +59,30 @@ const STASH_MODES: { id: StashMode; label: string }[] = [
   { id: "all", label: "All" },
 ];
 
+function getPaginationPages(current: number, total: number): (number | "ellipsis")[] {
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+  if (current <= 4) {
+    return [1, 2, 3, 4, 5, "ellipsis", total];
+  }
+  if (current >= total - 3) {
+    return [1, "ellipsis", total - 4, total - 3, total - 2, total - 1, total];
+  }
+  return [1, "ellipsis", current - 1, current, current + 1, "ellipsis", total];
+}
+
 export default function ListPage() {
-  const { ready, questions, sources } = useLibrary();
+  const { ready, questions, allQuestions, sources } = useLibrary();
+  const allLibraryQuestions = allQuestions && allQuestions.length > 0 ? allQuestions : questions;
   const { settings } = useSettings();
   const { openModal, openPicker } = useCapture();
   const handleAddQuestions = openModal || openPicker;
   const router = useRouter();
   const [state, setState] = useSessionState<ListState>("mb.listState", INITIAL);
   const [exportOpen, setExportOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const pageSize = 30;
 
   const syllabus = useMemo(
     () => getSyllabus(settings.examMode),
@@ -74,6 +91,18 @@ export default function ListPage() {
 
   const set = (patch: Partial<ListState>) =>
     setState((prev) => ({ ...prev, ...patch }));
+
+  // Reset to page 1 whenever active filters or sort order change
+  useEffect(() => {
+    setPage(1);
+  }, [
+    state.subjectId,
+    state.chapterId,
+    state.mistake,
+    state.source,
+    state.sort,
+    state.stash,
+  ]);
 
   // When switching exam modes, if the active filter belongs to a different mode, reset to All
   useEffect(() => {
@@ -105,7 +134,7 @@ export default function ListPage() {
     const bySubject = new Map<string, number>();
     const byChapter = new Map<string, number>();
     let total = 0;
-    for (const q of questions) {
+    for (const q of allLibraryQuestions) {
       if (q.stashed) continue;
       if (!q.subjectId || activeSubjectIds.has(q.subjectId)) {
         total += 1;
@@ -118,10 +147,10 @@ export default function ListPage() {
       }
     }
     return { bySubject, byChapter, total };
-  }, [questions, syllabus]);
+  }, [allLibraryQuestions, syllabus]);
 
   const filtered = useMemo(() => {
-    let list = questions.filter((q) =>
+    let list = allLibraryQuestions.filter((q) =>
       state.stash === "active"
         ? !q.stashed
         : state.stash === "stashed"
@@ -147,7 +176,21 @@ export default function ListPage() {
       list = list.filter((q) => q.sourceId === state.source);
     }
     return sortQuestions(list, state.sort);
-  }, [questions, state, syllabus]);
+  }, [allLibraryQuestions, state, syllabus]);
+
+  const totalItems = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+
+  const displayedQuestions = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, safePage, pageSize]);
+
+  const paginationPages = useMemo(
+    () => getPaginationPages(safePage, totalPages),
+    [safePage, totalPages],
+  );
 
   const openViewer = (id: string) => {
     // Freeze the filtered, sorted order for the viewer session.
@@ -159,6 +202,22 @@ export default function ListPage() {
     } catch {
       // Ignore.
     }
+
+    // Preload clicked question and next 3 questions into memory from DB immediately
+    const clickedIndex = filtered.findIndex((q) => q.id === id);
+    if (clickedIndex !== -1) {
+      const next3 = filtered
+        .slice(clickedIndex + 1, clickedIndex + 4)
+        .map((q) => q.id);
+      const toPreload = [id, ...next3];
+      const knownBlobs = new Map<string, Blob>();
+      for (const tid of toPreload) {
+        const found = filtered.find((q) => q.id === tid);
+        if (found?.image) knownBlobs.set(tid, found.image);
+      }
+      void preloadQuestionImages(toPreload, knownBlobs);
+    }
+
     router.push(`/viewer/${id}`);
   };
 
@@ -482,10 +541,78 @@ export default function ListPage() {
               )}
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-4">
-              {filtered.map((q) => (
-                <QuestionCard key={q.id} question={q} onOpen={openViewer} />
-              ))}
+            <div className="space-y-6">
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-4">
+                {displayedQuestions.map((q) => (
+                  <QuestionCard key={q.id} question={q} onOpen={openViewer} />
+                ))}
+              </div>
+
+              {totalPages > 1 && (
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-line/60 pt-4 pb-2">
+                  <span className="text-[13px] text-muted">
+                    Showing <span className="font-medium text-fg">{(safePage - 1) * pageSize + 1}</span>–
+                    <span className="font-medium text-fg">{Math.min(safePage * pageSize, totalItems)}</span> of{" "}
+                    <span className="font-medium text-fg">{totalItems}</span> questions
+                  </span>
+
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={safePage <= 1}
+                      onClick={() => {
+                        setPage((p) => Math.max(1, p - 1));
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      }}
+                      aria-label="Previous page"
+                    >
+                      <Icon name="arrow-left" size={14} />
+                      Previous
+                    </Button>
+
+                    <div className="flex items-center gap-1 px-1">
+                      {paginationPages.map((p, idx) =>
+                        p === "ellipsis" ? (
+                          <span key={`ellipsis-${idx}`} className="px-1 text-muted text-[13px]">
+                            …
+                          </span>
+                        ) : (
+                          <button
+                            key={p}
+                            type="button"
+                            onClick={() => {
+                              setPage(p as number);
+                              window.scrollTo({ top: 0, behavior: "smooth" });
+                            }}
+                            className={`h-7 min-w-7 rounded px-2 text-[13px] font-medium transition-colors ${
+                              p === safePage
+                                ? "bg-soft text-fg"
+                                : "text-muted hover:bg-soft/50 hover:text-fg"
+                            }`}
+                          >
+                            {p}
+                          </button>
+                        ),
+                      )}
+                    </div>
+
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={safePage >= totalPages}
+                      onClick={() => {
+                        setPage((p) => Math.min(totalPages, p + 1));
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      }}
+                      aria-label="Next page"
+                    >
+                      Next
+                      <Icon name="arrow-right" size={14} />
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

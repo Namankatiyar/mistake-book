@@ -22,6 +22,7 @@ export const PHYSICS_SUBJECT: Subject = {
     { id: "phy-oscillations", name: "Oscillations" },
     { id: "phy-waves", name: "Waves" },
     { id: "phy-electrostatics", name: "Electrostatics" },
+    { id: "phy-capacitance", name: "Capacitance" },
     { id: "phy-current", name: "Current electricity" },
     { id: "phy-magnetism", name: "Moving charges and magnetism" },
     { id: "phy-matter", name: "Magnetism and matter" },

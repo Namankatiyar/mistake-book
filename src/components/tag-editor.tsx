@@ -5,7 +5,7 @@ import { useLibrary } from "@/lib/library";
 import type { Question } from "@/lib/model";
 import { useToast } from "@/lib/toast";
 import { MistakeField, SourceField, SubjectChapterFields } from "./fields";
-import { Button, IconButton, Modal } from "./ui";
+import { Button, Field, IconButton, Modal } from "./ui";
 
 export function TagEditor({
   question,
@@ -22,6 +22,7 @@ export function TagEditor({
   const [chapterId, setChapterId] = useState(question.chapterId);
   const [mistakeId, setMistakeId] = useState<string | null>(question.mistakeId);
   const [sourceId, setSourceId] = useState<string | null>(question.sourceId);
+  const [answerKey, setAnswerKey] = useState(question.answerKey ?? "");
 
   const save = async () => {
     await updateQuestion(question.id, {
@@ -29,6 +30,7 @@ export function TagEditor({
       chapterId,
       mistakeId,
       sourceId,
+      answerKey: answerKey.trim(),
     });
     push("Tags updated");
     onClose();
@@ -56,6 +58,20 @@ export function TagEditor({
           />
           <MistakeField value={mistakeId} onChange={setMistakeId} />
           <SourceField value={sourceId} onChange={setSourceId} />
+          <Field label="Answer key" className="sm:col-span-2">
+            <input
+              className="input tnum w-full"
+              value={answerKey}
+              placeholder="Final answer only — option or number"
+              onChange={(e) => setAnswerKey(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void save();
+                }
+              }}
+            />
+          </Field>
         </div>
         <div className="flex justify-end gap-2 border-t border-line px-4 py-3">
           <Button variant="ghost" onClick={onClose}>

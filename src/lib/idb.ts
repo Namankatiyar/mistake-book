@@ -1,2 +1,2 @@
-// Re-export PGlite + Drizzle implementation for backward compatibility
-export * from "./pglite-db";
+// Re-export SQLite + Drizzle implementation for backward compatibility
+export * from "./sqlite-db";
