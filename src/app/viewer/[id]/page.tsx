@@ -216,10 +216,9 @@ function ViewerQuestion({
   const { push } = useToast();
 
   const [attempt, setAttempt] = useState("");
-  const [phase, setPhase] = useState<"answer" | "result" | "add-key">("answer");
+  const [phase, setPhase] = useState<"answer" | "result">("answer");
   const [correct, setCorrect] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
-  const [keyDraft, setKeyDraft] = useState("");
   const [editing, setEditing] = useState(false);
 
   const mistake = mistakeById(question.mistakeId);
@@ -262,28 +261,25 @@ function ViewerQuestion({
 
   const hasKey = question.answerKey.trim().length > 0;
 
-  const check = () => {
+  const handleSubmit = async () => {
     if (phase !== "answer") return;
+    const val = attempt.trim();
+    if (!val) return;
+
     if (!hasKey) {
-      setPhase("add-key");
+      await updateQuestion(question.id, { answerKey: val });
+      push("Answer key saved");
+      if (nextId) {
+        onNavigate(nextId);
+      } else {
+        setAttempt("");
+        setPhase("answer");
+      }
       return;
     }
-    if (!attempt.trim()) return;
-    setCorrect(checkAttempt(attempt, question.answerKey));
-    setPhase("result");
-  };
 
-  const saveKey = async () => {
-    const k = keyDraft.trim();
-    if (!k) return;
-    await updateQuestion(question.id, { answerKey: k });
-    if (nextId) {
-      onNavigate(nextId);
-    } else {
-      setKeyDraft("");
-      setAttempt("");
-      setPhase("answer");
-    }
+    setCorrect(checkAttempt(val, question.answerKey));
+    setPhase("result");
   };
 
   const saveNote = async () => {
@@ -384,13 +380,15 @@ function ViewerQuestion({
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              check();
+              void handleSubmit();
             }}
           >
             <input
               className="input tnum h-10 transition-colors focus:border-muted focus:outline-none"
-              placeholder="Your answer"
-              aria-label="Your answer"
+              placeholder={
+                hasKey ? "Your answer" : "Enter answer key (option or number)"
+              }
+              aria-label={hasKey ? "Your answer" : "Answer key"}
               value={attempt}
               autoFocus
               disabled={phase === "result"}
@@ -435,38 +433,6 @@ function ViewerQuestion({
                   </Button>
                 </div>
               )}
-            </div>
-          )}
-
-          {phase === "add-key" && (
-            <div className="fade-in flex items-center gap-1.5">
-              <input
-                className="input tnum transition-colors focus:border-muted focus:outline-none"
-                placeholder="Final answer only — option or number"
-                aria-label="Answer key"
-                autoFocus
-                value={keyDraft}
-                onChange={(e) => setKeyDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void saveKey();
-                  } else if (e.key === "Escape") {
-                    e.stopPropagation();
-                    setPhase("answer");
-                  }
-                }}
-              />
-              <Button
-                variant="primary"
-                disabled={!keyDraft.trim()}
-                onClick={() => void saveKey()}
-              >
-                Save key
-              </Button>
-              <Button variant="ghost" onClick={() => setPhase("answer")}>
-                Cancel
-              </Button>
             </div>
           )}
 
@@ -515,10 +481,8 @@ function ViewerQuestion({
                 <Button
                   variant="primary"
                   className="min-w-32"
-                  disabled={
-                    phase !== "answer" || (hasKey && !attempt.trim())
-                  }
-                  onClick={check}
+                  disabled={phase !== "answer" || !attempt.trim()}
+                  onClick={() => void handleSubmit()}
                 >
                   {hasKey ? "Check" : "Add answer key"}
                 </Button>
