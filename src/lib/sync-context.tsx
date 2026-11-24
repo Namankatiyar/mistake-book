@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { getDb } from "@/lib/pglite-db";
+import { getDb } from "@/lib/sqlite-db";
 import { LibraryContext } from "@/lib/library";
 import {
   SyncRunner,

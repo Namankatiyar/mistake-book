@@ -1,4 +1,4 @@
-import type { PgliteDatabase } from "drizzle-orm/pglite";
+import type { SqliteDatabase } from "./sqlite-db";
 import * as schema from "@/db/schema";
 import { eq, asc, isNotNull, and, or, isNull } from "drizzle-orm";
 import { subjectById, chapterById } from "@/lib/syllabus";
@@ -60,7 +60,7 @@ async function processWithRateLimit<T>(
  * or driveFileId IS NULL, and enqueues them to sync_queue if not already pending/queued.
  */
 export async function ensureUnsyncedEnqueued(
-  db: PgliteDatabase<typeof schema>
+  db: SqliteDatabase
 ): Promise<void> {
   const existingQueue = await db
     .select({
@@ -136,7 +136,7 @@ export async function ensureUnsyncedEnqueued(
 }
 
 export class SyncRunner {
-  private getDb: () => Promise<{ db: PgliteDatabase<typeof schema> }>;
+  private getDb: () => Promise<{ db: SqliteDatabase }>;
   private listeners: Set<SyncStatusListener> = new Set();
   private progress: SyncProgress = {
     status: "idle",
@@ -151,7 +151,7 @@ export class SyncRunner {
   private offlineHandler: (() => void) | null = null;
   private enqueueHandler: (() => void) | null = null;
 
-  constructor(getDb: () => Promise<{ db: PgliteDatabase<typeof schema> }>) {
+  constructor(getDb: () => Promise<{ db: SqliteDatabase }>) {
     this.getDb = getDb;
 
     if (typeof window !== "undefined") {
@@ -527,7 +527,7 @@ export class SyncRunner {
   }
 
   private async getRootFolderId(
-    db: PgliteDatabase<typeof schema>,
+    db: SqliteDatabase,
     accessToken: string
   ): Promise<string> {
     const rows = await db
@@ -559,7 +559,7 @@ export class SyncRunner {
   }
 
   private async uploadUnifiedManifest(
-    db: PgliteDatabase<typeof schema>,
+    db: SqliteDatabase,
     accessToken: string,
     rootFolderId: string
   ): Promise<number> {
@@ -1020,7 +1020,7 @@ export class SyncRunner {
   }
 
   private async runSyncInternal(
-    db: PgliteDatabase<typeof schema>,
+    db: SqliteDatabase,
     accessToken: string,
     rootFolderId: string
   ): Promise<void> {
