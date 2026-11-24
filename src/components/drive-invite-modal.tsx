@@ -9,7 +9,7 @@ const STORAGE_VISIT_COUNT = "mb.visit_count";
 const STORAGE_DISMISSED = "mb.drive_invite_dismissed";
 const STORAGE_SIGNED_IN = "mb.has_signed_in";
 
-function GoogleDriveIcon({ className = "w-[54px] h-[48px]" }: { className?: string }) {
+export function GoogleDriveIcon({ className = "w-[54px] h-[48px]" }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 87.3 78"

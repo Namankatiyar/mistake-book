@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { GoogleDriveIcon } from "./drive-invite-modal";
 import { SettingsModal } from "./settings-modal";
 import { useSettings } from "@/lib/settings";
 import { useDriveSync } from "@/lib/sync-context";
@@ -22,55 +23,76 @@ export function Header() {
     setMounted(true);
   }, []);
 
-  // Cloud status pill state
-  let dotColor = "bg-orange-500";
-  let pillLabel = "Drive disconnected";
-  let pillTooltip = "Drive disconnected — click to connect";
+  const isOffline = mounted && syncProgress.status === "offline";
+  const isReauth =
+    mounted &&
+    syncProgress.status === "error" &&
+    Boolean(
+      syncProgress.lastError?.toLowerCase().includes("auth") ||
+        syncProgress.lastError?.toLowerCase().includes("token") ||
+        syncProgress.lastError?.toLowerCase().includes("unauthorized") ||
+        syncProgress.lastError?.toLowerCase().includes("login")
+    );
+
+  const isDriveDisconnected =
+    !isOffline &&
+    (!mounted ||
+      !authStatus.connected ||
+      syncProgress.status === "unauthenticated" ||
+      isReauth);
+
+  // Cloud status pill state (for connected / offline / error states)
+  let dotColor = "bg-emerald-500";
+  let pillLabel = "Synced";
+  let pillTooltip = "Synced";
   let isSyncing = false;
 
   if (mounted) {
-    if (syncProgress.status === "offline") {
+    if (isOffline) {
       dotColor = "bg-neutral-400 dark:bg-neutral-500";
       pillLabel = "Offline";
       pillTooltip = "Offline (changes saved locally)";
-    } else if (!authStatus.connected || syncProgress.status === "unauthenticated") {
-      dotColor = "bg-orange-500";
-      pillLabel = "Drive disconnected";
-      pillTooltip = "Drive disconnected — click to connect";
     } else if (syncProgress.status === "syncing") {
       dotColor = "bg-amber-500";
       isSyncing = true;
-      const count =
-        syncProgress.pending > 0
-          ? syncProgress.pending
-          : syncProgress.total > 0
-            ? Math.max(0, syncProgress.total - syncProgress.processed)
-            : 0;
-      pillLabel = count > 0 ? `Syncing (${count})…` : "Syncing…";
+      const percent =
+        syncProgress.total > 0
+          ? Math.min(
+              100,
+              Math.max(
+                0,
+                Math.round((syncProgress.processed / syncProgress.total) * 100)
+              )
+            )
+          : 0;
+      pillLabel = `Syncing ${percent}%`;
       pillTooltip =
-        count > 0
-          ? `Syncing ${count} pending items`
-          : "Syncing changes to Google Drive…";
-    } else if (syncProgress.status === "error") {
-      const isReauth =
-        syncProgress.lastError?.toLowerCase().includes("auth") ||
-        syncProgress.lastError?.toLowerCase().includes("token") ||
-        syncProgress.lastError?.toLowerCase().includes("unauthorized") ||
-        syncProgress.lastError?.toLowerCase().includes("login");
-      dotColor = isReauth ? "bg-orange-500" : "bg-red-500";
-      pillLabel = isReauth ? "Re-auth needed" : "Sync error";
-      pillTooltip = isReauth
-        ? "Re-auth needed — click to reconnect"
-        : syncProgress.lastError || "Sync error — click to view";
+        syncProgress.total > 0
+          ? `Syncing changes (${percent}% — ${syncProgress.processed}/${syncProgress.total})`
+          : `Syncing changes (${percent}%)`;
+    } else if (syncProgress.status === "error" && !isReauth) {
+      dotColor = "bg-red-500";
+      pillLabel = "Sync error";
+      pillTooltip = syncProgress.lastError || "Sync error — click to view";
     } else if (syncProgress.pending > 0) {
       dotColor = "bg-amber-500";
       isSyncing = true;
-      pillLabel = `Syncing (${syncProgress.pending})…`;
-      pillTooltip = `${syncProgress.pending} changes pending sync`;
+      const percent =
+        syncProgress.total > 0
+          ? Math.min(
+              100,
+              Math.max(
+                0,
+                Math.round((syncProgress.processed / syncProgress.total) * 100)
+              )
+            )
+          : 0;
+      pillLabel = `Syncing ${percent}%`;
+      pillTooltip = `${syncProgress.pending} changes pending sync (${percent}%)`;
     } else {
       dotColor = "bg-emerald-500";
-      pillLabel = "Cloud: Synced";
-      pillTooltip = "Cloud: Synced";
+      pillLabel = "Synced";
+      pillTooltip = "Synced";
     }
   }
 
@@ -97,31 +119,32 @@ export function Header() {
   // The viewer has no chrome.
   if (pathname.startsWith("/viewer")) return null;
 
-  const isDriveDisconnected =
-    !authStatus.connected ||
-    syncProgress.status === "unauthenticated" ||
-    pillLabel === "Drive disconnected" ||
-    pillLabel === "Re-auth needed";
-
   return (
     <>
       <header className="border-b border-line bg-bg">
-        <div className="flex h-14 w-full items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-2.5">
-            <Link href="/" className="flex items-center gap-2">
+        <div className="flex h-14 w-full items-center justify-between px-3 sm:px-6 gap-2">
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+            {/* App logo: On mobile, replaced/hidden when sign-in CTA button is active to prevent overflow */}
+            <Link
+              href="/"
+              className={`items-center gap-2 shrink-0 ${
+                isDriveDisconnected ? "hidden sm:flex" : "flex"
+              }`}
+              aria-label="Mistake book"
+            >
               <Image
                 src="/mistake-book.png"
                 alt="Mistake book icon"
                 width={22}
                 height={22}
                 priority
-                className="h-[22px] w-[22px] rounded-[4px] object-contain"
+                className="h-[22px] w-[22px] rounded-[4px] object-contain shrink-0"
               />
               <span className="text-[16px] font-semibold text-fg">Mistake book</span>
             </Link>
 
             {/* Exam Mode Dropdown */}
-            <div className="relative" ref={dropdownRef}>
+            <div className="relative shrink-0" ref={dropdownRef}>
               <button
                 type="button"
                 onClick={() => setDropdownOpen((prev) => !prev)}
@@ -193,33 +216,45 @@ export function Header() {
             </div>
           </div>
 
-          <nav className="flex items-center gap-2">
-            <Tooltip content={pillTooltip} side="bottom" asChild>
-              <button
-                type="button"
-                onClick={() => {
-                  if (isDriveDisconnected) {
-                    openSignInModal();
-                  } else {
-                    setSettingsOpen(true);
-                  }
-                }}
-                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-surface/80 px-2 sm:px-2.5 text-[12px] font-medium text-muted hover:border-fg/20 hover:bg-soft hover:text-fg transition-colors select-none cursor-pointer"
-                aria-label={pillTooltip}
+          <nav className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {isDriveDisconnected ? (
+              <Tooltip
+                content="Connect Google Drive to back up and sync your questions"
+                side="bottom"
+                asChild
               >
-                <span className="relative flex h-2 w-2 shrink-0 items-center justify-center">
-                  {isSyncing && (
+                <button
+                  type="button"
+                  onClick={openSignInModal}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-full bg-fg text-bg px-2.5 sm:px-3 text-[12px] font-medium hover:opacity-90 active:scale-[0.98] transition-all select-none cursor-pointer shadow-xs whitespace-nowrap shrink-0"
+                  aria-label="Connect Google Drive"
+                >
+                  <GoogleDriveIcon className="h-3.5 w-3.5 shrink-0" />
+                  <span>Connect Google Drive</span>
+                </button>
+              </Tooltip>
+            ) : (
+              <Tooltip content={pillTooltip} side="bottom" asChild>
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen(true)}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-surface/80 px-2 sm:px-2.5 text-[12px] font-medium text-muted hover:border-fg/20 hover:bg-soft hover:text-fg transition-colors select-none cursor-pointer whitespace-nowrap shrink-0"
+                  aria-label={pillTooltip}
+                >
+                  <span className="relative flex h-2 w-2 shrink-0 items-center justify-center">
+                    {isSyncing && (
+                      <span
+                        className={`absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping ${dotColor}`}
+                      />
+                    )}
                     <span
-                      className={`absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping ${dotColor}`}
+                      className={`relative inline-flex h-2 w-2 rounded-full ${dotColor}`}
                     />
-                  )}
-                  <span
-                    className={`relative inline-flex h-2 w-2 rounded-full ${dotColor}`}
-                  />
-                </span>
-                <span className="hidden sm:inline">{pillLabel}</span>
-              </button>
-            </Tooltip>
+                  </span>
+                  <span className={isSyncing ? "tnum" : ""}>{pillLabel}</span>
+                </button>
+              </Tooltip>
+            )}
             <IconButton
               name="cog"
               label="Settings"
