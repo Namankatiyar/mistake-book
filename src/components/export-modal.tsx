@@ -31,6 +31,7 @@ import {
   type MetadataOptions,
   type ExportProgress,
 } from "@/lib/pdf-export";
+import { getQuestionImageFromDb } from "@/lib/idb";
 
 type ExportModalProps = {
   open: boolean;
@@ -247,7 +248,13 @@ export function ExportModal({
       for (const q of questionsToAnalyze) {
         if (cancelled) break;
         try {
-          const res = await detectDarkMode(q.image);
+          const blob = await getQuestionImageFromDb(q.id);
+          if (cancelled) break;
+          if (!blob) {
+            results[q.id] = { isDark: false, previewUrl: "" };
+            continue;
+          }
+          const res = await detectDarkMode(blob);
           results[q.id] = { isDark: res.isDark, previewUrl: res.previewUrl };
           if (res.isDark && darkModeInversionEnabled && inversions[q.id] === undefined) {
             newInversions[q.id] = true;

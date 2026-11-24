@@ -104,12 +104,7 @@ export default function ViewerPage() {
       }
 
       // Preload images into memory from DB
-      const knownBlobs = new Map<string, Blob>();
-      for (const targetId of toPreload) {
-        const found = allLibraryQuestions.find((q) => q.id === targetId);
-        if (found?.image) knownBlobs.set(targetId, found.image);
-      }
-      void preloadQuestionImages(toPreload, knownBlobs);
+      void preloadQuestionImages(toPreload);
     }
   }, [ids, index, id, prevId, allLibraryQuestions, router]);
 
@@ -210,7 +205,7 @@ function ViewerQuestion({
   onNavigate: (id: string) => void;
   onBack: () => void;
 }) {
-  const url = useQuestionImage(question.id, question.image);
+  const url = useQuestionImage(question.id);
   const { updateQuestion, countRevision, sources } = useLibrary();
   const { settings } = useSettings();
   const { push } = useToast();

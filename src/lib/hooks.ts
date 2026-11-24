@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type RefObject, useEffect, useState } from "react";
 
 /** Object URL for a stored image blob; revoked on unmount / blob change. */
 export function useObjectUrl(blob: Blob | undefined): string | null {
@@ -46,4 +46,57 @@ export function useSessionState<T>(
   }, [key, value]);
 
   return [value, setValue];
+}
+
+/**
+ * Hook to detect when an element enters the viewport.
+ * Latches to `true` once intersected and disconnects the observer to prevent
+ * flickering back to skeleton on scroll.
+ * Falls back to `true` if IntersectionObserver is undefined.
+ */
+export function useInView(
+  ref: RefObject<Element | null>,
+  options?: IntersectionObserverInit,
+): boolean {
+  const [inView, setInView] = useState(() => {
+    if (typeof window !== "undefined" && !("IntersectionObserver" in window)) {
+      return true;
+    }
+    return false;
+  });
+
+  const root = options?.root;
+  const rootMargin = options?.rootMargin ?? "200px 0px";
+  const threshold = options?.threshold;
+
+  useEffect(() => {
+    if (inView) return;
+
+    if (typeof window === "undefined" || !("IntersectionObserver" in window)) {
+      setInView(true);
+      return;
+    }
+
+    const element = ref.current;
+    if (!element) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [entry] = entries;
+        if (entry?.isIntersecting) {
+          setInView(true);
+          observer.disconnect();
+        }
+      },
+      { root, rootMargin, threshold },
+    );
+
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [ref, inView, root, rootMargin, threshold]);
+
+  return inView;
 }

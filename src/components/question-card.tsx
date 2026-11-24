@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useObjectUrl } from "@/lib/hooks";
+import { useInView } from "@/lib/hooks";
+import { useQuestionImage } from "@/lib/image-cache";
 import { useLibrary } from "@/lib/library";
 import { mistakeById, type Question } from "@/lib/model";
 import { useSettings } from "@/lib/settings";
@@ -41,7 +42,9 @@ export function QuestionCard({
   question: Question;
   onOpen: (id: string) => void;
 }) {
-  const url = useObjectUrl(question.image);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const inView = useInView(previewRef, { rootMargin: "200px 0px" });
+  const url = useQuestionImage(question.id, { enabled: inView });
   const { stageDelete, cancelDelete, commitDelete, sources } = useLibrary();
   const { settings } = useSettings();
   const [editing, setEditing] = useState(false);
@@ -111,7 +114,10 @@ export function QuestionCard({
       >
         <div>
           {/* Top: Question Preview or Stylized Skeleton */}
-          <div className="relative flex aspect-[16/10.5] w-full overflow-hidden rounded-[10px] bg-[#eae7df] dark:bg-[#1a1a1a] border border-black/5 dark:border-white/5">
+          <div
+            ref={previewRef}
+            className="relative flex aspect-[16/10.5] w-full overflow-hidden rounded-[10px] bg-[#eae7df] dark:bg-[#1a1a1a] border border-black/5 dark:border-white/5"
+          >
             {/* Revision counting badge: smaller, top right corner over question thumbnail */}
             <div className="absolute top-1.5 right-1.5 z-10">
               <RevisionBadge count={question.revisionCount} size="sm" />
@@ -130,6 +136,7 @@ export function QuestionCard({
                   alt={`Question — ${chapter?.name ?? subject?.name ?? "question"}`}
                   className="h-full w-full object-contain p-1.5"
                   loading="lazy"
+                  decoding="async"
                 />
               </>
             ) : (

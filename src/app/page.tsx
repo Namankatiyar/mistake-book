@@ -210,12 +210,7 @@ export default function ListPage() {
         .slice(clickedIndex + 1, clickedIndex + 4)
         .map((q) => q.id);
       const toPreload = [id, ...next3];
-      const knownBlobs = new Map<string, Blob>();
-      for (const tid of toPreload) {
-        const found = filtered.find((q) => q.id === tid);
-        if (found?.image) knownBlobs.set(tid, found.image);
-      }
-      void preloadQuestionImages(toPreload, knownBlobs);
+      void preloadQuestionImages(toPreload);
     }
 
     router.push(`/viewer/${id}`);

@@ -16,12 +16,13 @@ import {
   loadQuestionsPaginated,
   putQuestion,
   putQuestions,
+  putQuestionWithImage,
   putSource,
   removeQuestion,
   removeSource,
 } from "./idb";
 import { newId, todayKey, type Question, type Source } from "./model";
-import { evictImage } from "./image-cache";
+import { cacheImageBlob, evictImage } from "./image-cache";
 import { useToast } from "./toast";
 
 export type NewQuestion = {
@@ -136,7 +137,6 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       const now = Date.now();
       const q: Question = {
         id: newId(),
-        image: input.image,
         createdAt: now,
         updatedAt: now,
         syncedAt: null,
@@ -153,12 +153,13 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         isDeleted: false,
       };
       try {
-        await putQuestion(q);
+        await putQuestionWithImage(q, input.image);
         await enqueueSyncItem("question", q.id, "upsert");
       } catch {
         push("Couldn't save — browser storage may be full");
         return null;
       }
+      cacheImageBlob(q.id, input.image);
       setQuestions((prev) => [q, ...prev]);
       return q;
     },

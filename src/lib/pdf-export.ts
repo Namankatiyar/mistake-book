@@ -2,6 +2,7 @@ import { jsPDF } from "jspdf";
 import type { Question, Source } from "./model";
 import { mistakeById } from "./model";
 import { chapterById, subjectById, subjectOfChapter } from "./syllabus";
+import { getQuestionImageFromDb } from "./idb";
 
 export type ColumnFormat = "1" | "2";
 
@@ -226,7 +227,9 @@ export async function generateContinuousPdf(options: GeneratePdfOptions): Promis
     await new Promise((r) => setTimeout(r, 0));
 
     try {
-      const processed = await processImageForExport(q.image, shouldInvert);
+      const imageBlob = await getQuestionImageFromDb(q.id);
+      if (!imageBlob) continue;
+      const processed = await processImageForExport(imageBlob, shouldInvert);
       processedList.push({
         question: q,
         dataUrl: processed.dataUrl,

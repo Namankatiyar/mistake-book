@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getQuestionImageFromDb, getQuestionImagesFromDb } from "./idb";
+import { getQuestionImagesFromDb } from "./idb";
 
 export type CacheEntry = {
   id: string;
@@ -10,23 +10,38 @@ export type CacheEntry = {
   img?: HTMLImageElement;
   decoded: boolean;
   lastUsed: number;
+  refCount: number;
 };
 
-const MAX_CACHE_SIZE = 30;
+export type UseQuestionImageOptions = {
+  enabled?: boolean;
+  initialBlob?: Blob;
+};
+
+const MAX_CACHE_SIZE = 90;
 const cache = new Map<string, CacheEntry>();
-const pendingLoads = new Map<string, Promise<string | null>>();
+
+type BatchRequest = {
+  id: string;
+  resolve: (url: string | null) => void;
+  reject: (err: unknown) => void;
+};
+
+let batchQueue: BatchRequest[] = [];
+let batchScheduled = false;
+const pendingRequests = new Map<string, Promise<string | null>>();
 
 function pruneCache(protectedIds: Set<string> = new Set()) {
   if (cache.size <= MAX_CACHE_SIZE) return;
 
-  // Find oldest entries not currently protected
+  // Find oldest entries not currently protected or held by mounted components
   const entries = Array.from(cache.values()).sort(
     (a, b) => a.lastUsed - b.lastUsed,
   );
 
   for (const entry of entries) {
     if (cache.size <= MAX_CACHE_SIZE) break;
-    if (protectedIds.has(entry.id)) continue;
+    if (entry.refCount > 0 || protectedIds.has(entry.id)) continue;
 
     // Revoke object URL to free memory
     try {
@@ -42,6 +57,7 @@ function pruneCache(protectedIds: Set<string> = new Set()) {
  * Returns the cached object URL synchronously if already preloaded into memory.
  */
 export function getCachedImageUrl(id: string): string | null {
+  if (!id) return null;
   const entry = cache.get(id);
   if (entry) {
     entry.lastUsed = Date.now();
@@ -68,6 +84,7 @@ export function cacheImageBlob(id: string, blob: Blob): string {
     url,
     decoded: false,
     lastUsed: Date.now(),
+    refCount: 0,
   };
 
   if (typeof window !== "undefined") {
@@ -84,9 +101,69 @@ export function cacheImageBlob(id: string, blob: Blob): string {
       });
   }
 
-  pruneCache(new Set([id]));
   cache.set(id, entry);
+  pruneCache(new Set([id]));
   return url;
+}
+
+async function flushBatch() {
+  batchScheduled = false;
+  const currentBatch = batchQueue;
+  batchQueue = [];
+
+  if (currentBatch.length === 0) return;
+
+  const idsToFetch = Array.from(new Set(currentBatch.map((req) => req.id)));
+
+  try {
+    const dbBlobs = await getQuestionImagesFromDb(idsToFetch);
+
+    for (const req of currentBatch) {
+      const blob = dbBlobs.get(req.id);
+      if (blob) {
+        const url = cacheImageBlob(req.id, blob);
+        req.resolve(url);
+      } else {
+        req.resolve(null);
+      }
+    }
+  } catch (err) {
+    console.error("[requestImage] Batch DB fetch error:", err);
+    for (const req of currentBatch) {
+      req.resolve(null);
+    }
+  } finally {
+    for (const id of idsToFetch) {
+      pendingRequests.delete(id);
+    }
+  }
+}
+
+/**
+ * Micro-batched DB fetching that coalesces concurrent missing IDs
+ * within the same tick into a single getQuestionImagesFromDb call.
+ */
+export async function requestImage(id: string): Promise<string | null> {
+  if (typeof window === "undefined" || !id) return null;
+
+  const cached = getCachedImageUrl(id);
+  if (cached) return cached;
+
+  const inFlight = pendingRequests.get(id);
+  if (inFlight) return inFlight;
+
+  const promise = new Promise<string | null>((resolve, reject) => {
+    batchQueue.push({ id, resolve, reject });
+  });
+
+  pendingRequests.set(id, promise);
+
+  if (!batchScheduled) {
+    batchScheduled = true;
+    queueMicrotask(flushBatch);
+  }
+
+  return promise;
 }
 
 /**
@@ -96,31 +173,16 @@ export async function preloadSingleImage(
   id: string,
   knownBlob?: Blob,
 ): Promise<string | null> {
+  if (!id) return null;
+
   const existing = getCachedImageUrl(id);
   if (existing) return existing;
 
-  const pending = pendingLoads.get(id);
-  if (pending) return pending;
+  if (knownBlob) {
+    return cacheImageBlob(id, knownBlob);
+  }
 
-  const promise = (async () => {
-    try {
-      let blob = knownBlob;
-      if (!blob) {
-        blob = (await getQuestionImageFromDb(id)) ?? undefined;
-      }
-      if (!blob) return null;
-
-      return cacheImageBlob(id, blob);
-    } catch (err) {
-      console.error(`[preload] Failed to preload image for question ${id}:`, err);
-      return null;
-    } finally {
-      pendingLoads.delete(id);
-    }
-  })();
-
-  pendingLoads.set(id, promise);
-  return promise;
+  return requestImage(id);
 }
 
 /**
@@ -195,12 +257,26 @@ export async function preloadQuestionImages(
 /**
  * Hook to retrieve a question's image URL instantly from memory.
  * If preloaded, returns the object URL synchronously on line 1 of render.
- * If not preloaded, caches the initialBlob immediately and decodes in background.
+ * While url is held by the mounted hook, entry.refCount is incremented.
+ * Only triggers requestImage / preloadSingleImage when enabled !== false and not yet cached.
  */
 export function useQuestionImage(
   id: string,
-  initialBlob?: Blob,
+  options?: Blob | UseQuestionImageOptions,
 ): string | null {
+  let enabled = true;
+  let initialBlob: Blob | undefined;
+
+  if (options instanceof Blob) {
+    initialBlob = options;
+  } else if (options && typeof options === "object") {
+    if (options.enabled !== undefined) {
+      enabled = options.enabled;
+    }
+    initialBlob = options.initialBlob;
+  }
+
+  const [prevId, setPrevId] = useState(id);
   const [url, setUrl] = useState<string | null>(() => {
     const cached = getCachedImageUrl(id);
     if (cached) return cached;
@@ -210,10 +286,31 @@ export function useQuestionImage(
     return null;
   });
 
-  useEffect(() => {
-    let cancelled = false;
+  if (prevId !== id) {
+    setPrevId(id);
+    const cached = getCachedImageUrl(id);
+    setUrl(cached ?? (initialBlob ? cacheImageBlob(id, initialBlob) : null));
+  }
 
-    // Check if URL became available or is already cached
+  // Ref count management: while url is held by mounted hook, increment refCount
+  useEffect(() => {
+    if (!url) return;
+    const entry = cache.get(id);
+    if (entry) {
+      entry.refCount += 1;
+    }
+    return () => {
+      const e = cache.get(id);
+      if (e) {
+        e.refCount = Math.max(0, e.refCount - 1);
+      }
+    };
+  }, [id, url]);
+
+  // Fetching logic: only trigger requestImage when enabled !== false and not yet cached
+  useEffect(() => {
+    if (enabled === false) return;
+
     const cached = getCachedImageUrl(id);
     if (cached) {
       if (url !== cached) {
@@ -222,7 +319,13 @@ export function useQuestionImage(
       return;
     }
 
-    void preloadSingleImage(id, initialBlob).then((loadedUrl) => {
+    let cancelled = false;
+
+    const loadPromise = initialBlob
+      ? preloadSingleImage(id, initialBlob)
+      : requestImage(id);
+
+    void loadPromise.then((loadedUrl) => {
       if (!cancelled && loadedUrl) {
         setUrl(loadedUrl);
       }
@@ -231,7 +334,7 @@ export function useQuestionImage(
     return () => {
       cancelled = true;
     };
-  }, [id, initialBlob, url]);
+  }, [id, enabled, initialBlob, url]);
 
   return url;
 }
@@ -263,5 +366,7 @@ export function clearImageCache(): void {
     }
   }
   cache.clear();
-  pendingLoads.clear();
+  pendingRequests.clear();
+  batchQueue = [];
+  batchScheduled = false;
 }

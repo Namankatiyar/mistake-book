@@ -1,6 +1,5 @@
 export type Question = {
   id: string;
-  image: Blob;
   createdAt: number;
   updatedAt: number;
   syncedAt: number | null;

@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { AlertCircle, RefreshCw, RotateCw } from "lucide-react";
+import { AlertCircle, DatabaseBackup, RefreshCw, RotateCw } from "lucide-react";
 import { Button, ConfirmAction, IconButton, Kbd, Modal, Toggle } from "@/components/ui";
 import { useLibrary } from "@/lib/library";
 import { useSettings, type Theme, type ExamMode } from "@/lib/settings";
@@ -420,9 +420,10 @@ export function SettingsModal({
                         variant="outline"
                         disabled={syncProgress.status === "syncing" || isRestoringAction}
                         onClick={() => setConfirmingRestore(true)}
-                        className="text-muted hover:text-fg"
+                        className="inline-flex items-center gap-1.5"
                       >
-                        Restore from Drive
+                        <DatabaseBackup className="h-3.5 w-3.5" />
+                        <span>Restore from Drive</span>
                       </Button>
                     )}
                   </div>

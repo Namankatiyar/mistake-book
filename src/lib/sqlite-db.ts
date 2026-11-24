@@ -132,7 +132,6 @@ function patchEmptyBlobBinding(sqlite3: any, wasmModule: any, rawDb: number): vo
 function mapRowToQuestion(row: schema.DbQuestion): Question {
   return {
     id: row.id,
-    image: uint8ArrayToBlob(row.image),
     createdAt: Number(row.createdAt),
     updatedAt: Number(row.updatedAt ?? row.createdAt),
     syncedAt: row.syncedAt != null ? Number(row.syncedAt) : null,
@@ -312,13 +311,10 @@ async function migrateLegacyPgliteData(
 
       // Insert questions
       for (const q of questionsRes.rows) {
-        const imageBytes = toUint8Array(q.image);
-
         await sqliteDb
           .insert(schema.questions)
           .values({
             id: q.id,
-            image: imageBytes,
             createdAt: Number(q.created_at),
             updatedAt: Number(q.updated_at ?? q.created_at),
             syncedAt: q.synced_at != null ? Number(q.synced_at) : null,
@@ -333,6 +329,15 @@ async function migrateLegacyPgliteData(
             stashed: Boolean(q.stashed),
             driveFileId: q.drive_file_id ?? null,
             isDeleted: Boolean(q.is_deleted),
+          })
+          .onConflictDoNothing();
+
+        const imageBytes = toUint8Array(q.image);
+        await sqliteDb
+          .insert(schema.questionImages)
+          .values({
+            questionId: q.id,
+            image: imageBytes,
           })
           .onConflictDoNothing();
       }
@@ -424,6 +429,8 @@ export async function getDb(): Promise<SqliteInstance> {
       // Ensure 0-byte Uint8Array / binary BLOBs bind as X'' instead of SQL NULL
       patchEmptyBlobBinding(sqlite3, wasmModule, rawDb);
 
+      await sqlite3.exec(rawDb, "PRAGMA foreign_keys = ON;");
+
       // Setup schema tables and indices
       await sqlite3.exec(
         rawDb,
@@ -439,7 +446,6 @@ export async function getDb(): Promise<SqliteInstance> {
 
         CREATE TABLE IF NOT EXISTS questions (
           id TEXT PRIMARY KEY,
-          image BLOB NOT NULL,
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL,
           synced_at INTEGER,
@@ -454,6 +460,12 @@ export async function getDb(): Promise<SqliteInstance> {
           stashed INTEGER NOT NULL DEFAULT 0,
           drive_file_id TEXT,
           is_deleted INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS question_images (
+          question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
+          image BLOB NOT NULL,
+          image_hash TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_questions_created_at ON questions(created_at);
@@ -479,6 +491,73 @@ export async function getDb(): Promise<SqliteInstance> {
         );
       `
       );
+
+      // Check for legacy schema migration (questions table containing 'image' column)
+      let hasImageColumn = false;
+      for await (const stmt of sqlite3.statements(rawDb, "PRAGMA table_info(questions);")) {
+        while ((await sqlite3.step(stmt)) === SQLite.SQLITE_ROW) {
+          const row = sqlite3.row(stmt);
+          if (row && (row[1] === "image" || (row as any).name === "image")) {
+            hasImageColumn = true;
+            break;
+          }
+        }
+      }
+
+      if (hasImageColumn) {
+        await sqlite3.exec(rawDb, "PRAGMA foreign_keys = OFF;");
+        await sqlite3.exec(rawDb, "BEGIN TRANSACTION;");
+        try {
+          await sqlite3.exec(
+            rawDb,
+            `
+            INSERT OR IGNORE INTO question_images (question_id, image)
+            SELECT id, image FROM questions WHERE image IS NOT NULL;
+
+            CREATE TABLE questions_v2 (
+              id TEXT PRIMARY KEY,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              synced_at INTEGER,
+              subject_id TEXT NOT NULL,
+              chapter_id TEXT NOT NULL,
+              mistake_id TEXT,
+              source_id TEXT REFERENCES sources(id) ON DELETE SET NULL,
+              answer_key TEXT NOT NULL DEFAULT '',
+              note TEXT NOT NULL DEFAULT '',
+              revision_count INTEGER NOT NULL DEFAULT 0,
+              last_revision_day TEXT,
+              stashed INTEGER NOT NULL DEFAULT 0,
+              drive_file_id TEXT,
+              is_deleted INTEGER NOT NULL DEFAULT 0
+            );
+
+            INSERT INTO questions_v2 (
+              id, created_at, updated_at, synced_at, subject_id, chapter_id,
+              mistake_id, source_id, answer_key, note, revision_count,
+              last_revision_day, stashed, drive_file_id, is_deleted
+            )
+            SELECT
+              id, created_at, updated_at, synced_at, subject_id, chapter_id,
+              mistake_id, source_id, answer_key, note, revision_count,
+              last_revision_day, stashed, drive_file_id, is_deleted
+            FROM questions;
+
+            DROP TABLE questions;
+            ALTER TABLE questions_v2 RENAME TO questions;
+
+            CREATE INDEX IF NOT EXISTS idx_questions_created_at ON questions(created_at);
+            CREATE INDEX IF NOT EXISTS idx_questions_subject ON questions(subject_id);
+          `
+          );
+          await sqlite3.exec(rawDb, "COMMIT;");
+        } catch (migErr) {
+          await sqlite3.exec(rawDb, "ROLLBACK;");
+          throw migErr;
+        } finally {
+          await sqlite3.exec(rawDb, "PRAGMA foreign_keys = ON;");
+        }
+      }
 
       // Drizzle adapter using sqlite-proxy with strict FIFO AsyncMutex
       const db = drizzle(
@@ -623,13 +702,11 @@ export async function loadQuestionsPaginated({
 
 export async function putQuestion(q: Question): Promise<void> {
   const { db } = await getDb();
-  const imageBytes = await blobToUint8Array(q.image);
   const updatedAt = q.updatedAt || Date.now();
   await db
     .insert(schema.questions)
     .values({
       id: q.id,
-      image: imageBytes,
       createdAt: q.createdAt,
       updatedAt,
       syncedAt: q.syncedAt ?? null,
@@ -648,7 +725,6 @@ export async function putQuestion(q: Question): Promise<void> {
     .onConflictDoUpdate({
       target: schema.questions.id,
       set: {
-        image: imageBytes,
         createdAt: q.createdAt,
         updatedAt,
         syncedAt: q.syncedAt ?? null,
@@ -669,8 +745,88 @@ export async function putQuestion(q: Question): Promise<void> {
 
 export async function putQuestions(qs: Question[]): Promise<void> {
   if (qs.length === 0) return;
-  for (const q of qs) {
-    await putQuestion(q);
+  const { sqlite3, rawDb } = await getDb();
+  await dbMutex.run(() => sqlite3.exec(rawDb, "BEGIN TRANSACTION;"));
+  try {
+    for (const q of qs) {
+      await putQuestion(q);
+    }
+    await dbMutex.run(() => sqlite3.exec(rawDb, "COMMIT;"));
+  } catch (err) {
+    await dbMutex.run(() => sqlite3.exec(rawDb, "ROLLBACK;"));
+    throw err;
+  }
+}
+
+export async function putQuestionWithImage(
+  q: Question,
+  image: Blob,
+  imageHash?: string | null
+): Promise<void> {
+  const imageBytes = await blobToUint8Array(image);
+  const { db, sqlite3, rawDb } = await getDb();
+  const updatedAt = q.updatedAt || Date.now();
+
+  await dbMutex.run(() => sqlite3.exec(rawDb, "BEGIN TRANSACTION;"));
+  try {
+    await db
+      .insert(schema.questions)
+      .values({
+        id: q.id,
+        createdAt: q.createdAt,
+        updatedAt,
+        syncedAt: q.syncedAt ?? null,
+        subjectId: q.subjectId,
+        chapterId: q.chapterId,
+        mistakeId: q.mistakeId,
+        sourceId: q.sourceId,
+        answerKey: q.answerKey,
+        note: q.note,
+        revisionCount: q.revisionCount,
+        lastRevisionDay: q.lastRevisionDay,
+        stashed: q.stashed,
+        driveFileId: q.driveFileId ?? null,
+        isDeleted: q.isDeleted ?? false,
+      })
+      .onConflictDoUpdate({
+        target: schema.questions.id,
+        set: {
+          createdAt: q.createdAt,
+          updatedAt,
+          syncedAt: q.syncedAt ?? null,
+          subjectId: q.subjectId,
+          chapterId: q.chapterId,
+          mistakeId: q.mistakeId,
+          sourceId: q.sourceId,
+          answerKey: q.answerKey,
+          note: q.note,
+          revisionCount: q.revisionCount,
+          lastRevisionDay: q.lastRevisionDay,
+          stashed: q.stashed,
+          driveFileId: q.driveFileId ?? null,
+          isDeleted: q.isDeleted ?? false,
+        },
+      });
+
+    await db
+      .insert(schema.questionImages)
+      .values({
+        questionId: q.id,
+        image: imageBytes,
+        imageHash: imageHash ?? null,
+      })
+      .onConflictDoUpdate({
+        target: schema.questionImages.questionId,
+        set: {
+          image: imageBytes,
+          ...(imageHash !== undefined ? { imageHash } : {}),
+        },
+      });
+
+    await dbMutex.run(() => sqlite3.exec(rawDb, "COMMIT;"));
+  } catch (err) {
+    await dbMutex.run(() => sqlite3.exec(rawDb, "ROLLBACK;"));
+    throw err;
   }
 }
 
@@ -746,9 +902,9 @@ export async function getQuestionImageFromDb(id: string): Promise<Blob | null> {
   if (!isBrowser()) return null;
   const { db } = await getDb();
   const rows = await db
-    .select({ image: schema.questions.image })
-    .from(schema.questions)
-    .where(eq(schema.questions.id, id))
+    .select({ image: schema.questionImages.image })
+    .from(schema.questionImages)
+    .where(eq(schema.questionImages.questionId, id))
     .limit(1);
 
   if (rows.length === 0 || !rows[0].image) return null;
@@ -759,9 +915,12 @@ export async function getQuestionImagesFromDb(ids: string[]): Promise<Map<string
   if (!isBrowser() || ids.length === 0) return new Map();
   const { db } = await getDb();
   const rows = await db
-    .select({ id: schema.questions.id, image: schema.questions.image })
-    .from(schema.questions)
-    .where(inArray(schema.questions.id, ids));
+    .select({
+      id: schema.questionImages.questionId,
+      image: schema.questionImages.image,
+    })
+    .from(schema.questionImages)
+    .where(inArray(schema.questionImages.questionId, ids));
 
   const result = new Map<string, Blob>();
   for (const row of rows) {
@@ -770,4 +929,56 @@ export async function getQuestionImagesFromDb(ids: string[]): Promise<Map<string
     }
   }
   return result;
+}
+
+export async function getQuestionImageBytesFromDb(id: string): Promise<Uint8Array | null> {
+  if (!isBrowser()) return null;
+  const { db } = await getDb();
+  const rows = await db
+    .select({ image: schema.questionImages.image })
+    .from(schema.questionImages)
+    .where(eq(schema.questionImages.questionId, id))
+    .limit(1);
+
+  if (rows.length === 0 || !rows[0].image) return null;
+  return toUint8Array(rows[0].image);
+}
+
+export async function upsertQuestionImageBytes(
+  questionId: string,
+  image: Uint8Array,
+  imageHash?: string | null
+): Promise<void> {
+  if (!isBrowser()) return;
+  const { db } = await getDb();
+  const safeBytes = toUint8Array(image);
+
+  await db
+    .insert(schema.questionImages)
+    .values({
+      questionId,
+      image: safeBytes,
+      imageHash: imageHash ?? null,
+    })
+    .onConflictDoUpdate({
+      target: schema.questionImages.questionId,
+      set: {
+        image: safeBytes,
+        ...(imageHash !== undefined ? { imageHash } : {}),
+      },
+    });
+}
+
+export async function updateQuestionImageHash(
+  questionId: string,
+  imageHash: string
+): Promise<void> {
+  if (!isBrowser()) return;
+  const { db } = await getDb();
+  await db
+    .update(schema.questionImages)
+    .set({
+      imageHash,
+    })
+    .where(eq(schema.questionImages.questionId, questionId));
 }

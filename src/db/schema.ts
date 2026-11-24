@@ -27,7 +27,6 @@ export const sources = sqliteTable("sources", {
 
 export const questions = sqliteTable("questions", {
   id: text("id").primaryKey(),
-  image: blob("image").notNull(),
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
   syncedAt: integer("synced_at", { mode: "number" }),
@@ -42,6 +41,14 @@ export const questions = sqliteTable("questions", {
   stashed: integer("stashed", { mode: "boolean" }).notNull().default(false),
   driveFileId: text("drive_file_id"),
   isDeleted: integer("is_deleted", { mode: "boolean" }).notNull().default(false),
+});
+
+export const questionImages = sqliteTable("question_images", {
+  questionId: text("question_id")
+    .primaryKey()
+    .references(() => questions.id, { onDelete: "cascade" }),
+  image: blob("image").notNull(),
+  imageHash: text("image_hash"),
 });
 
 export const syncQueue = sqliteTable("sync_queue", {
@@ -63,6 +70,7 @@ export const syncMetadata = sqliteTable("sync_metadata", {
 });
 
 export type DbQuestion = typeof questions.$inferSelect;
+export type DbQuestionImage = typeof questionImages.$inferSelect;
 export type DbSource = typeof sources.$inferSelect;
 export type DbSyncQueue = typeof syncQueue.$inferSelect;
 export type DbSyncMetadata = typeof syncMetadata.$inferSelect;

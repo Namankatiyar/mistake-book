@@ -1,4 +1,10 @@
 import type { SqliteDatabase } from "./sqlite-db";
+import {
+  getQuestionImageBytesFromDb,
+  upsertQuestionImageBytes,
+  updateQuestionImageHash,
+} from "./sqlite-db";
+import { evictImage } from "./image-cache";
 import * as schema from "@/db/schema";
 import { eq, asc, isNotNull, and, or, isNull } from "drizzle-orm";
 import { subjectById, chapterById } from "@/lib/syllabus";
@@ -55,7 +61,6 @@ function formatSyncError(err: unknown): string {
 function buildQuestionFieldsFromManifest(
   q: ManifestQuestion,
   options: {
-    image: Uint8Array;
     sourceId: string | null;
     isDeleted: boolean;
   }
@@ -63,7 +68,6 @@ function buildQuestionFieldsFromManifest(
   const createdAt = q.createdAt ?? q.updatedAt ?? Date.now();
   const updatedAt = q.updatedAt ?? q.createdAt ?? createdAt;
   return {
-    image: options.image,
     createdAt,
     updatedAt,
     syncedAt: updatedAt,
@@ -291,6 +295,10 @@ export class SyncRunner {
     return this.mergeWithCloud();
   }
 
+  public async mergeRemoteManifest(): Promise<void> {
+    return this.mergeWithCloud();
+  }
+
   public async mergeWithCloud(): Promise<void> {
     if (this.isDestroyed) return;
     if (this.syncPromise) {
@@ -302,6 +310,17 @@ export class SyncRunner {
     });
 
     return this.syncPromise;
+  }
+
+  public async processSyncQueue(
+    db?: SqliteDatabase,
+    accessToken?: string,
+    rootFolderId?: string
+  ): Promise<void> {
+    if (db && accessToken && rootFolderId) {
+      return this.runSyncInternal(db, accessToken, rootFolderId);
+    }
+    return this.runSync();
   }
 
   public async runSync(): Promise<void> {
@@ -436,9 +455,9 @@ export class SyncRunner {
             const imageBlob = await downloadImage(accessToken, q.driveFileId);
             const imageBuffer = await imageBlob.arrayBuffer();
             const imageBytes = new Uint8Array(imageBuffer);
+            const imageHash = await computeBytesHash(imageBytes);
             const sId = q.sourceId && validSourceIds.has(q.sourceId) ? q.sourceId : null;
             const fields = buildQuestionFieldsFromManifest(q, {
-              image: imageBytes,
               sourceId: sId,
               isDeleted: false,
             });
@@ -450,6 +469,11 @@ export class SyncRunner {
                 target: schema.questions.id,
                 set: fields,
               });
+
+            await upsertQuestionImageBytes(q.id, imageBytes, imageHash);
+            if (existing) {
+              evictImage(q.id);
+            }
           }
         }
 
@@ -596,8 +620,29 @@ export class SyncRunner {
   ): Promise<number> {
     const allSources = await db.select().from(schema.sources);
     const syncedQuestions = await db
-      .select()
+      .select({
+        id: schema.questions.id,
+        createdAt: schema.questions.createdAt,
+        updatedAt: schema.questions.updatedAt,
+        syncedAt: schema.questions.syncedAt,
+        subjectId: schema.questions.subjectId,
+        chapterId: schema.questions.chapterId,
+        mistakeId: schema.questions.mistakeId,
+        sourceId: schema.questions.sourceId,
+        answerKey: schema.questions.answerKey,
+        note: schema.questions.note,
+        revisionCount: schema.questions.revisionCount,
+        lastRevisionDay: schema.questions.lastRevisionDay,
+        stashed: schema.questions.stashed,
+        driveFileId: schema.questions.driveFileId,
+        isDeleted: schema.questions.isDeleted,
+        imageHash: schema.questionImages.imageHash,
+      })
       .from(schema.questions)
+      .leftJoin(
+        schema.questionImages,
+        eq(schema.questions.id, schema.questionImages.questionId)
+      )
       .where(isNotNull(schema.questions.driveFileId));
 
     const manifestQuestions: ManifestQuestion[] = await Promise.all(
@@ -605,10 +650,14 @@ export class SyncRunner {
         const subjectName = subjectById(q.subjectId)?.name ?? q.subjectId;
         const chapterName = chapterById(q.chapterId)?.name ?? q.chapterId;
         const fileName = formatQuestionFileName(q);
-        const imageHash =
-          q.image && q.image.byteLength > 0
-            ? await computeBytesHash(q.image)
-            : "";
+        let imageHash = q.imageHash ?? "";
+        if (!imageHash) {
+          const bytes = await getQuestionImageBytesFromDb(q.id);
+          if (bytes && bytes.byteLength > 0) {
+            imageHash = await computeBytesHash(bytes);
+            await updateQuestionImageHash(q.id, imageHash);
+          }
+        }
         return {
           id: q.id,
           driveFileId: q.driveFileId!,
@@ -790,7 +839,30 @@ export class SyncRunner {
       const validSourceIds = new Set(currentSources.map((s) => s.id));
 
       // --- Questions Merge ---
-      const localQuestions = await db.select().from(schema.questions);
+      const localQuestions = await db
+        .select({
+          id: schema.questions.id,
+          createdAt: schema.questions.createdAt,
+          updatedAt: schema.questions.updatedAt,
+          syncedAt: schema.questions.syncedAt,
+          subjectId: schema.questions.subjectId,
+          chapterId: schema.questions.chapterId,
+          mistakeId: schema.questions.mistakeId,
+          sourceId: schema.questions.sourceId,
+          answerKey: schema.questions.answerKey,
+          note: schema.questions.note,
+          revisionCount: schema.questions.revisionCount,
+          lastRevisionDay: schema.questions.lastRevisionDay,
+          stashed: schema.questions.stashed,
+          driveFileId: schema.questions.driveFileId,
+          isDeleted: schema.questions.isDeleted,
+          imageHash: schema.questionImages.imageHash,
+        })
+        .from(schema.questions)
+        .leftJoin(
+          schema.questionImages,
+          eq(schema.questions.id, schema.questionImages.questionId)
+        );
       const localQuestionMap = new Map(localQuestions.map((q) => [q.id, q]));
       const remoteQuestionMap = new Map(remoteQuestions.map((q) => [q.id, q]));
 
@@ -816,7 +888,6 @@ export class SyncRunner {
           // Remote question missing locally
           if (remoteQ.isDeleted) {
             const fields = buildQuestionFieldsFromManifest(remoteQ, {
-              image: new Uint8Array(0),
               sourceId: sId,
               isDeleted: true,
             });
@@ -878,9 +949,13 @@ export class SyncRunner {
                   )
                 );
             } else {
-              let localHash = "";
-              if (localQ.image && localQ.image.byteLength > 0) {
-                localHash = await computeBytesHash(localQ.image);
+              let localHash = localQ.imageHash ?? "";
+              if (!localHash) {
+                const bytes = await getQuestionImageBytesFromDb(localQ.id);
+                if (bytes && bytes.byteLength > 0) {
+                  localHash = await computeBytesHash(bytes);
+                  await updateQuestionImageHash(localQ.id, localHash);
+                }
               }
               const needDownload = !localHash || localHash !== remoteQ.imageHash;
 
@@ -973,9 +1048,9 @@ export class SyncRunner {
           const imageBlob = await downloadImage(accessToken, q.driveFileId);
           const imageBuffer = await imageBlob.arrayBuffer();
           const imageBytes = new Uint8Array(imageBuffer);
+          const imageHash = await computeBytesHash(imageBytes);
           const sId = q.sourceId && validSourceIds.has(q.sourceId) ? q.sourceId : null;
           const fields = buildQuestionFieldsFromManifest(q, {
-            image: imageBytes,
             sourceId: sId,
             isDeleted: false,
           });
@@ -993,6 +1068,12 @@ export class SyncRunner {
               .update(schema.questions)
               .set(fields)
               .where(eq(schema.questions.id, q.id));
+          }
+
+          await upsertQuestionImageBytes(q.id, imageBytes, imageHash);
+
+          if (task.mode === "update") {
+            evictImage(q.id);
           }
 
           downloadedCount++;
@@ -1103,6 +1184,26 @@ export class SyncRunner {
               .where(eq(schema.questions.id, q.id));
             await db.delete(schema.syncQueue).where(eq(schema.syncQueue.id, item.id));
           } else {
+            const imageBytes = await getQuestionImageBytesFromDb(q.id);
+            if (!imageBytes || imageBytes.byteLength === 0) {
+              await db
+                .update(schema.questions)
+                .set({ syncedAt: Date.now() })
+                .where(eq(schema.questions.id, q.id));
+              await db.delete(schema.syncQueue).where(eq(schema.syncQueue.id, item.id));
+              return;
+            }
+
+            const [imgRow] = await db
+              .select({ imageHash: schema.questionImages.imageHash })
+              .from(schema.questionImages)
+              .where(eq(schema.questionImages.questionId, q.id));
+
+            if (!imgRow?.imageHash) {
+              const hash = await computeBytesHash(imageBytes);
+              await updateQuestionImageHash(q.id, hash);
+            }
+
             const subject = subjectById(q.subjectId);
             const subjectName = subject?.name ?? q.subjectId;
             const chapter = chapterById(q.chapterId);
@@ -1115,7 +1216,7 @@ export class SyncRunner {
             );
 
             const fileName = formatQuestionFileName(q);
-            const blob = new Blob([q.image as unknown as BlobPart], { type: "image/png" });
+            const blob = new Blob([imageBytes as unknown as BlobPart], { type: "image/png" });
             const driveFileId = await uploadImage(
               accessToken,
               blob,
