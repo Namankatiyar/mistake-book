@@ -46,7 +46,87 @@ async function blobToUint8Array(blob: Blob): Promise<Uint8Array> {
 
 // Convert BLOB (Uint8Array) -> Blob
 function uint8ArrayToBlob(bytes: Uint8Array, type = "image/png"): Blob {
-  return new Blob([bytes as unknown as BlobPart], { type });
+  const safeBytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(0);
+  return new Blob([safeBytes as unknown as BlobPart], { type });
+}
+
+// Coerce binary values (including empty views) to Uint8Array
+function toUint8Array(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (Array.isArray(value)) return new Uint8Array(value);
+  return new Uint8Array(0);
+}
+
+// Normalize Drizzle sqlite-proxy parameters for wa-sqlite
+function normalizeSqliteParams(params?: unknown[]): unknown[] | undefined {
+  if (!params || params.length === 0) return params;
+  return params.map((p) => {
+    if (typeof p === "boolean") {
+      return p ? 1 : 0;
+    }
+    if (p instanceof Uint8Array) {
+      return p;
+    }
+    if (p instanceof ArrayBuffer) {
+      return new Uint8Array(p);
+    }
+    if (ArrayBuffer.isView(p)) {
+      return new Uint8Array(p.buffer, p.byteOffset, p.byteLength);
+    }
+    return p;
+  });
+}
+
+// Patch wa-sqlite's bind_blob so 0-byte BLOBs bind as X'' instead of SQL NULL
+// (wa-sqlite calls sqlite3_malloc(0) -> 0/NULL, which sqlite3_bind_blob treats as NULL).
+function patchEmptyBlobBinding(sqlite3: any, wasmModule: any, rawDb: number): void {
+  const originalBindBlob = sqlite3.bind_blob.bind(sqlite3);
+  const SQLITE_TRANSIENT = -1;
+  const rawBindBlob = wasmModule.cwrap("sqlite3_bind_blob", "number", [
+    "number",
+    "number",
+    "number",
+    "number",
+    "number",
+  ]);
+  const SQLiteErrorCtor = (
+    SQLite as unknown as {
+      SQLiteError?: new (message: string, code: number) => Error;
+    }
+  ).SQLiteError;
+
+  sqlite3.bind_blob = (stmt: number, index: number, value: Uint8Array | number[]) => {
+    const byteLength = value instanceof Uint8Array ? value.byteLength : value.length;
+    if (byteLength === 0) {
+      // Validate statement handle just like wa-sqlite's bind_blob
+      sqlite3.bind_parameter_count(stmt);
+      const ptr = wasmModule._sqlite3_malloc(1);
+      if (!ptr) {
+        const SQLITE_NOMEM = 7;
+        throw SQLiteErrorCtor
+          ? new SQLiteErrorCtor("out of memory", SQLITE_NOMEM)
+          : new Error("SQLite out of memory");
+      }
+      let rc: number;
+      try {
+        rc = rawBindBlob(stmt, index, ptr, 0, SQLITE_TRANSIENT);
+      } finally {
+        wasmModule._sqlite3_free(ptr);
+      }
+      if (rc !== SQLite.SQLITE_OK) {
+        const message = wasmModule.ccall("sqlite3_errmsg", "string", ["number"], [rawDb]);
+        throw SQLiteErrorCtor
+          ? new SQLiteErrorCtor(message, rc)
+          : new Error(`SQLite error (${rc}): ${message}`);
+      }
+      return rc;
+    }
+    return originalBindBlob(stmt, index, value);
+  };
 }
 
 function mapRowToQuestion(row: schema.DbQuestion): Question {
@@ -177,7 +257,7 @@ async function migrateLegacyPgliteData(
 
     const questionsRes = await pg.query<{
       id: string;
-      image: Uint8Array;
+      image: Uint8Array | null;
       created_at: string | number;
       updated_at: string | number;
       synced_at: string | number | null;
@@ -221,7 +301,7 @@ async function migrateLegacyPgliteData(
           .insert(schema.sources)
           .values({
             id: s.id,
-            name: s.name,
+            name: s.name ?? "",
             createdAt: Number(s.created_at),
             updatedAt: Number(s.updated_at ?? s.created_at),
             syncedAt: s.synced_at != null ? Number(s.synced_at) : null,
@@ -232,10 +312,7 @@ async function migrateLegacyPgliteData(
 
       // Insert questions
       for (const q of questionsRes.rows) {
-        const imageBytes =
-          q.image instanceof Uint8Array
-            ? q.image
-            : new Uint8Array(q.image as any);
+        const imageBytes = toUint8Array(q.image);
 
         await sqliteDb
           .insert(schema.questions)
@@ -245,8 +322,8 @@ async function migrateLegacyPgliteData(
             createdAt: Number(q.created_at),
             updatedAt: Number(q.updated_at ?? q.created_at),
             syncedAt: q.synced_at != null ? Number(q.synced_at) : null,
-            subjectId: q.subject_id,
-            chapterId: q.chapter_id,
+            subjectId: q.subject_id ?? "",
+            chapterId: q.chapter_id ?? "",
             mistakeId: q.mistake_id ?? null,
             sourceId: q.source_id ?? null,
             answerKey: q.answer_key ?? "",
@@ -344,6 +421,9 @@ export async function getDb(): Promise<SqliteInstance> {
         "mistake-book-sqlite-vfs"
       );
 
+      // Ensure 0-byte Uint8Array / binary BLOBs bind as X'' instead of SQL NULL
+      patchEmptyBlobBinding(sqlite3, wasmModule, rawDb);
+
       // Setup schema tables and indices
       await sqlite3.exec(
         rawDb,
@@ -404,19 +484,16 @@ export async function getDb(): Promise<SqliteInstance> {
       const db = drizzle(
         (sql: string, params: any[], method: "run" | "all" | "values" | "get") => {
           return dbMutex.run(async () => {
-            // Normalize boolean parameters to integers for SQLite
-            const normalizedParams = params?.map((p) => {
-              if (typeof p === "boolean") {
-                return p ? 1 : 0;
+            const normalizedParams = normalizeSqliteParams(params);
+            const bindParams = (stmt: number) => {
+              if (normalizedParams && normalizedParams.length > 0) {
+                sqlite3.bind_collection(stmt, normalizedParams);
               }
-              return p;
-            });
+            };
 
             if (method === "run") {
               for await (const stmt of sqlite3.statements(rawDb, sql)) {
-                if (normalizedParams && normalizedParams.length > 0) {
-                  sqlite3.bind_collection(stmt, normalizedParams);
-                }
+                bindParams(stmt);
                 await sqlite3.step(stmt);
               }
               return { rows: [] };
@@ -425,9 +502,7 @@ export async function getDb(): Promise<SqliteInstance> {
             if (method === "get") {
               let row: any = undefined;
               for await (const stmt of sqlite3.statements(rawDb, sql)) {
-                if (normalizedParams && normalizedParams.length > 0) {
-                  sqlite3.bind_collection(stmt, normalizedParams);
-                }
+                bindParams(stmt);
                 const rc = await sqlite3.step(stmt);
                 if (rc === SQLite.SQLITE_ROW) {
                   row = sqlite3.row(stmt);
@@ -439,9 +514,7 @@ export async function getDb(): Promise<SqliteInstance> {
             // method === "all" or "values"
             const rows: any[] = [];
             for await (const stmt of sqlite3.statements(rawDb, sql)) {
-              if (normalizedParams && normalizedParams.length > 0) {
-                sqlite3.bind_collection(stmt, normalizedParams);
-              }
+              bindParams(stmt);
               while ((await sqlite3.step(stmt)) === SQLite.SQLITE_ROW) {
                 rows.push(sqlite3.row(stmt));
               }

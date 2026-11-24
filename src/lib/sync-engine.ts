@@ -31,6 +31,56 @@ export type SyncProgress = {
 
 export type SyncStatusListener = (progress: SyncProgress) => void;
 
+function formatSyncError(err: unknown): string {
+  if (!(err instanceof Error)) {
+    return String(err);
+  }
+  const causeMessages: string[] = [];
+  const seen = new Set<unknown>([err]);
+  let current: unknown = err.cause;
+  while (current != null && causeMessages.length < 3 && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof Error) {
+      if (current.message) causeMessages.push(current.message);
+      current = current.cause;
+    } else {
+      causeMessages.push(String(current));
+      break;
+    }
+  }
+  const causeSummary = causeMessages.filter((msg) => msg && !err.message.includes(msg)).join(": ");
+  return causeSummary ? `${causeSummary} (${err.message})` : err.message;
+}
+
+function buildQuestionFieldsFromManifest(
+  q: ManifestQuestion,
+  options: {
+    image: Uint8Array;
+    sourceId: string | null;
+    isDeleted: boolean;
+  }
+) {
+  const createdAt = q.createdAt ?? q.updatedAt ?? Date.now();
+  const updatedAt = q.updatedAt ?? q.createdAt ?? createdAt;
+  return {
+    image: options.image,
+    createdAt,
+    updatedAt,
+    syncedAt: updatedAt,
+    subjectId: q.subjectId ?? "",
+    chapterId: q.chapterId ?? "",
+    mistakeId: q.mistakeId ?? null,
+    sourceId: options.sourceId,
+    answerKey: q.answerKey ?? "",
+    note: q.note ?? "",
+    revisionCount: q.revisionCount ?? 0,
+    lastRevisionDay: q.lastRevisionDay ?? null,
+    stashed: Boolean(q.stashed ?? false),
+    driveFileId: q.driveFileId ?? null,
+    isDeleted: options.isDeleted,
+  };
+}
+
 async function processWithRateLimit<T>(
   items: T[],
   concurrency: number,
@@ -273,7 +323,7 @@ export class SyncRunner {
       } catch (err) {
         this.updateProgress({
           status: "error",
-          lastError: err instanceof Error ? err.message : String(err),
+          lastError: formatSyncError(err),
         });
         return;
       }
@@ -316,39 +366,43 @@ export class SyncRunner {
         return;
       }
 
+      const manifestSources = Array.isArray(manifest.sources) ? manifest.sources : [];
+      const manifestQuestions = Array.isArray(manifest.questions) ? manifest.questions : [];
+
       // Restore sources
-      for (const s of manifest.sources) {
+      for (const s of manifestSources) {
         const [existing] = await db
           .select()
           .from(schema.sources)
           .where(eq(schema.sources.id, s.id));
 
-        if (!existing || s.updatedAt > Number(existing.updatedAt ?? existing.createdAt)) {
+        const createdAt = s.createdAt ?? s.updatedAt ?? Date.now();
+        const updatedAt = s.updatedAt ?? s.createdAt ?? createdAt;
+
+        if (!existing || updatedAt > Number(existing.updatedAt ?? existing.createdAt)) {
+          const sourceFields = {
+            name: s.name ?? "",
+            createdAt,
+            updatedAt,
+            syncedAt: updatedAt,
+            isDeleted: Boolean(s.isDeleted ?? false),
+          };
           await db
             .insert(schema.sources)
-            .values({
-              id: s.id,
-              name: s.name,
-              createdAt: s.createdAt,
-              updatedAt: s.updatedAt,
-              syncedAt: s.updatedAt,
-              isDeleted: s.isDeleted,
-            })
+            .values({ id: s.id, ...sourceFields })
             .onConflictDoUpdate({
               target: schema.sources.id,
-              set: {
-                name: s.name,
-                createdAt: s.createdAt,
-                updatedAt: s.updatedAt,
-                syncedAt: s.updatedAt,
-                isDeleted: s.isDeleted,
-              },
+              set: sourceFields,
             });
         }
       }
 
+      // Valid source IDs to guard foreign keys
+      const currentSources = await db.select({ id: schema.sources.id }).from(schema.sources);
+      const validSourceIds = new Set(currentSources.map((s) => s.id));
+
       // Restore questions
-      const totalQuestions = manifest.questions.length;
+      const totalQuestions = manifestQuestions.length;
       let processedQuestions = 0;
       this.updateProgress({
         status: "syncing",
@@ -357,13 +411,14 @@ export class SyncRunner {
         pending: totalQuestions,
       });
 
-      await processWithRateLimit(manifest.questions, 3, 50, async (q) => {
+      await processWithRateLimit(manifestQuestions, 3, 50, async (q) => {
         const [existing] = await db
           .select()
           .from(schema.questions)
           .where(eq(schema.questions.id, q.id));
 
-        const isNewer = !existing || q.updatedAt > Number(existing.updatedAt ?? existing.createdAt);
+        const updatedAt = q.updatedAt ?? q.createdAt ?? Date.now();
+        const isNewer = !existing || updatedAt > Number(existing.updatedAt ?? existing.createdAt);
 
         if (isNewer) {
           if (q.isDeleted) {
@@ -372,8 +427,8 @@ export class SyncRunner {
                 .update(schema.questions)
                 .set({
                   isDeleted: true,
-                  updatedAt: q.updatedAt,
-                  syncedAt: q.updatedAt,
+                  updatedAt,
+                  syncedAt: updatedAt,
                 })
                 .where(eq(schema.questions.id, q.id));
             }
@@ -381,46 +436,19 @@ export class SyncRunner {
             const imageBlob = await downloadImage(accessToken, q.driveFileId);
             const imageBuffer = await imageBlob.arrayBuffer();
             const imageBytes = new Uint8Array(imageBuffer);
+            const sId = q.sourceId && validSourceIds.has(q.sourceId) ? q.sourceId : null;
+            const fields = buildQuestionFieldsFromManifest(q, {
+              image: imageBytes,
+              sourceId: sId,
+              isDeleted: false,
+            });
 
             await db
               .insert(schema.questions)
-              .values({
-                id: q.id,
-                image: imageBytes,
-                createdAt: q.createdAt,
-                updatedAt: q.updatedAt,
-                syncedAt: q.updatedAt,
-                subjectId: q.subjectId,
-                chapterId: q.chapterId,
-                mistakeId: q.mistakeId,
-                sourceId: q.sourceId,
-                answerKey: q.answerKey,
-                note: q.note,
-                revisionCount: q.revisionCount,
-                lastRevisionDay: q.lastRevisionDay,
-                stashed: q.stashed,
-                driveFileId: q.driveFileId,
-                isDeleted: false,
-              })
+              .values({ id: q.id, ...fields })
               .onConflictDoUpdate({
                 target: schema.questions.id,
-                set: {
-                  image: imageBytes,
-                  createdAt: q.createdAt,
-                  updatedAt: q.updatedAt,
-                  syncedAt: q.updatedAt,
-                  subjectId: q.subjectId,
-                  chapterId: q.chapterId,
-                  mistakeId: q.mistakeId,
-                  sourceId: q.sourceId,
-                  answerKey: q.answerKey,
-                  note: q.note,
-                  revisionCount: q.revisionCount,
-                  lastRevisionDay: q.lastRevisionDay,
-                  stashed: q.stashed,
-                  driveFileId: q.driveFileId,
-                  isDeleted: false,
-                },
+                set: fields,
               });
           }
         }
@@ -462,13 +490,16 @@ export class SyncRunner {
         window.dispatchEvent(new CustomEvent("mb:library-reload"));
       }
     } catch (err: unknown) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = formatSyncError(err);
       if (errorMsg.includes("401")) {
         this.updateProgress({ status: "unauthenticated" });
       } else {
         this.updateProgress({ status: "error", lastError: errorMsg });
       }
-      throw err;
+      if (err instanceof Error) {
+        throw errorMsg !== err.message ? new Error(errorMsg, { cause: err }) : err;
+      }
+      throw new Error(errorMsg);
     }
   }
 
@@ -674,7 +705,7 @@ export class SyncRunner {
     } catch (err) {
       this.updateProgress({
         status: "error",
-        lastError: err instanceof Error ? err.message : String(err),
+        lastError: formatSyncError(err),
       });
       return;
     }
@@ -705,42 +736,48 @@ export class SyncRunner {
       }
 
       // 2. If remote manifest DOES exist:
+      const remoteSources = Array.isArray(remoteManifest.sources) ? remoteManifest.sources : [];
+      const remoteQuestions = Array.isArray(remoteManifest.questions) ? remoteManifest.questions : [];
+
       // --- Sources Merge ---
       const localSources = await db.select().from(schema.sources);
       const localSourceMap = new Map(localSources.map((s) => [s.id, s]));
 
-      for (const remoteS of remoteManifest.sources) {
+      for (const remoteS of remoteSources) {
         const localS = localSourceMap.get(remoteS.id);
+        const createdAt = remoteS.createdAt ?? remoteS.updatedAt ?? Date.now();
+        const updatedAt = remoteS.updatedAt ?? remoteS.createdAt ?? createdAt;
+        const sourceFields = {
+          name: remoteS.name ?? "",
+          createdAt,
+          updatedAt,
+          syncedAt: updatedAt,
+          isDeleted: Boolean(remoteS.isDeleted ?? false),
+        };
+
         if (!localS) {
           // Remote sources missing locally -> insert into local DB
-          await db.insert(schema.sources).values({
-            id: remoteS.id,
-            name: remoteS.name,
-            createdAt: remoteS.createdAt,
-            updatedAt: remoteS.updatedAt,
-            syncedAt: remoteS.updatedAt,
-            isDeleted: remoteS.isDeleted,
-          });
+          await db
+            .insert(schema.sources)
+            .values({ id: remoteS.id, ...sourceFields })
+            .onConflictDoUpdate({
+              target: schema.sources.id,
+              set: sourceFields,
+            });
         } else {
           // Sources existing in both -> Last-Write-Wins (LWW) based on updatedAt
           const localUpdated = Number(localS.updatedAt ?? localS.createdAt);
-          const remoteUpdated = Number(remoteS.updatedAt);
+          const remoteUpdated = Number(updatedAt);
           if (remoteUpdated > localUpdated) {
             await db
               .update(schema.sources)
-              .set({
-                name: remoteS.name,
-                createdAt: remoteS.createdAt,
-                updatedAt: remoteS.updatedAt,
-                syncedAt: remoteS.updatedAt,
-                isDeleted: remoteS.isDeleted,
-              })
+              .set(sourceFields)
               .where(eq(schema.sources.id, remoteS.id));
           } else if (localUpdated === remoteUpdated) {
             if (localS.syncedAt == null) {
               await db
                 .update(schema.sources)
-                .set({ syncedAt: remoteS.updatedAt })
+                .set({ syncedAt: updatedAt })
                 .where(eq(schema.sources.id, remoteS.id));
             }
           }
@@ -755,7 +792,7 @@ export class SyncRunner {
       // --- Questions Merge ---
       const localQuestions = await db.select().from(schema.questions);
       const localQuestionMap = new Map(localQuestions.map((q) => [q.id, q]));
-      const remoteQuestionMap = new Map(remoteManifest.questions.map((q) => [q.id, q]));
+      const remoteQuestionMap = new Map(remoteQuestions.map((q) => [q.id, q]));
 
       // Existing queue items to avoid duplicating
       const existingQueue = await db
@@ -770,42 +807,37 @@ export class SyncRunner {
         mode: "insert" | "update";
       }> = [];
 
-      for (const remoteQ of remoteManifest.questions) {
+      for (const remoteQ of remoteQuestions) {
         const localQ = localQuestionMap.get(remoteQ.id);
         const sId = remoteQ.sourceId && validSourceIds.has(remoteQ.sourceId) ? remoteQ.sourceId : null;
+        const remoteUpdatedAt = remoteQ.updatedAt ?? remoteQ.createdAt ?? 0;
 
         if (!localQ) {
           // Remote question missing locally
           if (remoteQ.isDeleted) {
-            await db.insert(schema.questions).values({
-              id: remoteQ.id,
+            const fields = buildQuestionFieldsFromManifest(remoteQ, {
               image: new Uint8Array(0),
-              createdAt: remoteQ.createdAt,
-              updatedAt: remoteQ.updatedAt,
-              syncedAt: remoteQ.updatedAt,
-              subjectId: remoteQ.subjectId,
-              chapterId: remoteQ.chapterId,
-              mistakeId: remoteQ.mistakeId,
               sourceId: sId,
-              answerKey: remoteQ.answerKey,
-              note: remoteQ.note,
-              revisionCount: remoteQ.revisionCount,
-              lastRevisionDay: remoteQ.lastRevisionDay,
-              stashed: remoteQ.stashed,
-              driveFileId: remoteQ.driveFileId,
               isDeleted: true,
             });
+            await db
+              .insert(schema.questions)
+              .values({ id: remoteQ.id, ...fields })
+              .onConflictDoUpdate({
+                target: schema.questions.id,
+                set: fields,
+              });
           } else {
             downloadTasks.push({ remoteQ, mode: "insert" });
           }
         } else {
           // Questions existing in both
           const localUpdated = Number(localQ.updatedAt ?? localQ.createdAt);
-          const remoteUpdated = Number(remoteQ.updatedAt);
+          const remoteUpdated = Number(remoteUpdatedAt);
 
           if (localUpdated > remoteUpdated) {
             // Local is newer -> keep local in DB, mark/enqueue for upload and manifest update
-            if (!localQ.driveFileId) {
+            if (!localQ.driveFileId && remoteQ.driveFileId) {
               await db
                 .update(schema.questions)
                 .set({ driveFileId: remoteQ.driveFileId })
@@ -831,9 +863,9 @@ export class SyncRunner {
                 .update(schema.questions)
                 .set({
                   isDeleted: true,
-                  updatedAt: remoteQ.updatedAt,
-                  syncedAt: remoteQ.updatedAt,
-                  driveFileId: remoteQ.driveFileId,
+                  updatedAt: remoteUpdated,
+                  syncedAt: remoteUpdated,
+                  driveFileId: remoteQ.driveFileId ?? null,
                 })
                 .where(eq(schema.questions.id, localQ.id));
 
@@ -858,18 +890,18 @@ export class SyncRunner {
                 await db
                   .update(schema.questions)
                   .set({
-                    subjectId: remoteQ.subjectId,
-                    chapterId: remoteQ.chapterId,
-                    mistakeId: remoteQ.mistakeId,
+                    subjectId: remoteQ.subjectId ?? "",
+                    chapterId: remoteQ.chapterId ?? "",
+                    mistakeId: remoteQ.mistakeId ?? null,
                     sourceId: sId,
-                    answerKey: remoteQ.answerKey,
-                    note: remoteQ.note,
-                    revisionCount: remoteQ.revisionCount,
-                    lastRevisionDay: remoteQ.lastRevisionDay,
-                    stashed: remoteQ.stashed,
-                    driveFileId: remoteQ.driveFileId,
-                    updatedAt: remoteQ.updatedAt,
-                    syncedAt: remoteQ.updatedAt,
+                    answerKey: remoteQ.answerKey ?? "",
+                    note: remoteQ.note ?? "",
+                    revisionCount: remoteQ.revisionCount ?? 0,
+                    lastRevisionDay: remoteQ.lastRevisionDay ?? null,
+                    stashed: Boolean(remoteQ.stashed ?? false),
+                    driveFileId: remoteQ.driveFileId ?? null,
+                    updatedAt: remoteUpdated,
+                    syncedAt: remoteUpdated,
                     isDeleted: false,
                   })
                   .where(eq(schema.questions.id, localQ.id));
@@ -886,12 +918,12 @@ export class SyncRunner {
             }
           } else {
             // Timestamps equal: already in sync, ensure driveFileId is preserved
-            if (!localQ.driveFileId || localQ.driveFileId !== remoteQ.driveFileId || localQ.syncedAt == null) {
+            if (!localQ.driveFileId || localQ.driveFileId !== (remoteQ.driveFileId ?? null) || localQ.syncedAt == null) {
               await db
                 .update(schema.questions)
                 .set({
-                  driveFileId: remoteQ.driveFileId,
-                  syncedAt: remoteQ.updatedAt,
+                  driveFileId: remoteQ.driveFileId ?? null,
+                  syncedAt: remoteUpdated,
                 })
                 .where(eq(schema.questions.id, localQ.id));
             }
@@ -942,46 +974,24 @@ export class SyncRunner {
           const imageBuffer = await imageBlob.arrayBuffer();
           const imageBytes = new Uint8Array(imageBuffer);
           const sId = q.sourceId && validSourceIds.has(q.sourceId) ? q.sourceId : null;
+          const fields = buildQuestionFieldsFromManifest(q, {
+            image: imageBytes,
+            sourceId: sId,
+            isDeleted: false,
+          });
 
           if (task.mode === "insert") {
-            await db.insert(schema.questions).values({
-              id: q.id,
-              image: imageBytes,
-              createdAt: q.createdAt,
-              updatedAt: q.updatedAt,
-              syncedAt: q.updatedAt,
-              subjectId: q.subjectId,
-              chapterId: q.chapterId,
-              mistakeId: q.mistakeId,
-              sourceId: sId,
-              answerKey: q.answerKey,
-              note: q.note,
-              revisionCount: q.revisionCount,
-              lastRevisionDay: q.lastRevisionDay,
-              stashed: q.stashed,
-              driveFileId: q.driveFileId,
-              isDeleted: false,
-            });
+            await db
+              .insert(schema.questions)
+              .values({ id: q.id, ...fields })
+              .onConflictDoUpdate({
+                target: schema.questions.id,
+                set: fields,
+              });
           } else {
             await db
               .update(schema.questions)
-              .set({
-                image: imageBytes,
-                createdAt: q.createdAt,
-                updatedAt: q.updatedAt,
-                syncedAt: q.updatedAt,
-                subjectId: q.subjectId,
-                chapterId: q.chapterId,
-                mistakeId: q.mistakeId,
-                sourceId: sId,
-                answerKey: q.answerKey,
-                note: q.note,
-                revisionCount: q.revisionCount,
-                lastRevisionDay: q.lastRevisionDay,
-                stashed: q.stashed,
-                driveFileId: q.driveFileId,
-                isDeleted: false,
-              })
+              .set(fields)
               .where(eq(schema.questions.id, q.id));
           }
 
@@ -1009,13 +1019,16 @@ export class SyncRunner {
       // Any local-only questions will now be in sync_queue and will be uploaded to Drive
       await this.runSyncInternal(db, accessToken, rootFolderId);
     } catch (err: unknown) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = formatSyncError(err);
       if (errorMsg.includes("401")) {
         this.updateProgress({ status: "unauthenticated" });
       } else {
         this.updateProgress({ status: "error", lastError: errorMsg });
       }
-      throw err;
+      if (err instanceof Error) {
+        throw errorMsg !== err.message ? new Error(errorMsg, { cause: err }) : err;
+      }
+      throw new Error(errorMsg);
     }
   }
 
@@ -1131,7 +1144,7 @@ export class SyncRunner {
           await db.delete(schema.syncQueue).where(eq(schema.syncQueue.id, item.id));
         }
       } catch (err: unknown) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
+        const errorMsg = formatSyncError(err);
         await db
           .update(schema.syncQueue)
           .set({
@@ -1195,7 +1208,7 @@ export class SyncRunner {
         window.dispatchEvent(new CustomEvent("mb:library-reload"));
       }
     } catch (err: unknown) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = formatSyncError(err);
       this.updateProgress({
         status: "error",
         lastError: errorMsg,
