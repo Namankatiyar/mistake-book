@@ -124,12 +124,10 @@ export function Header() {
       <header className="border-b border-line bg-bg">
         <div className="flex h-14 w-full items-center justify-between px-3 sm:px-6 gap-2">
           <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-            {/* App logo: On mobile, replaced/hidden when sign-in CTA button is active to prevent overflow */}
+            {/* App logo: Hidden on narrow screens to keep only the exam mode switcher on the left */}
             <Link
               href="/"
-              className={`items-center gap-2 shrink-0 ${
-                isDriveDisconnected ? "hidden sm:flex" : "flex"
-              }`}
+              className="hidden sm:flex items-center gap-2 shrink-0"
               aria-label="Mistake book"
             >
               <Image
