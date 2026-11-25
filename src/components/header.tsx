@@ -228,7 +228,9 @@ export function Header() {
                   aria-label="Connect Google Drive"
                 >
                   <GoogleDriveIcon className="h-3.5 w-3.5 shrink-0" />
-                  <span>Connect Google Drive</span>
+                  <span>
+                    Connect<span className="hidden sm:inline"> Google Drive</span>
+                  </span>
                 </button>
               </Tooltip>
             ) : (
