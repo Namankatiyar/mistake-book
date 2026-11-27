@@ -31,6 +31,7 @@ import {
   subjectById,
   subjectOfChapter,
 } from "@/lib/syllabus";
+import { useDriveSync } from "@/lib/sync-context";
 import { mistakeById } from "@/lib/model";
 import { toast } from "sonner";
 import { MistakeField, SourceField, SubjectChapterFields } from "./fields";
@@ -181,6 +182,7 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { addQuestion, sources, ready } = useLibrary();
   const { settings, update: updateSettings } = useSettings();
+  const { authChecked, signInModalOpen } = useDriveSync();
   const [defaults, setDefaults] = useState<CaptureDefaults>({
     subjectId: "phy",
     chapterId: "phy-units",
@@ -222,11 +224,16 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
   permissionCheckedRef.current = permissionChecked;
   const permissionPromptOpenRef = useRef(permissionPromptOpen);
   permissionPromptOpenRef.current = permissionPromptOpen;
+  const authCheckedRef = useRef(authChecked);
+  authCheckedRef.current = authChecked;
+  const signInModalOpenRef = useRef(signInModalOpen);
+  signInModalOpenRef.current = signInModalOpen;
 
   const checkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isCheckingRef = useRef(false);
   const lastCheckAtRef = useRef(0);
   const didMountCheckRef = useRef(false);
+  const blockedByAuthRef = useRef(false);
   const mountGraceUntilRef = useRef(0);
 
   const setActiveFilters = useCallback((filters: ActiveCaptureFilters | null) => {
@@ -668,10 +675,10 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
     if (queueRef.current.length > 0) return;
     if (document.querySelector('[role="dialog"]') !== null) return;
 
-    lastCheckAtRef.current = now;
     const permission = clipboardPermissionRef.current;
 
     if (permission === "granted") {
+      lastCheckAtRef.current = now;
       isCheckingRef.current = true;
       try {
         const files = await extractClipboardFiles();
@@ -707,6 +714,12 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
     }
 
     if (permission === "prompt") {
+      if (!authCheckedRef.current || signInModalOpenRef.current) {
+        blockedByAuthRef.current = true;
+        return;
+      }
+      blockedByAuthRef.current = false;
+      lastCheckAtRef.current = now;
       let dismissed = false;
       try {
         dismissed =
@@ -766,6 +779,13 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
     didMountCheckRef.current = true;
     scheduleClipboardCheck(350);
   }, [ready, permissionChecked, scheduleClipboardCheck]);
+
+  // Retry prompt check once auth status check completes (if deferred earlier)
+  useEffect(() => {
+    if (!authChecked || signInModalOpen || !blockedByAuthRef.current) return;
+    blockedByAuthRef.current = false;
+    scheduleClipboardCheck(100);
+  }, [authChecked, signInModalOpen, scheduleClipboardCheck]);
 
   const saveDraft = useCallback(
     async (values: {

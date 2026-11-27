@@ -40,8 +40,11 @@ export function ClipboardPermissionModal() {
     });
   };
 
+  const isOpen =
+    mounted && permissionPromptOpen && !pathname?.startsWith("/viewer");
+
   useEffect(() => {
-    if (!permissionPromptOpen) return;
+    if (!isOpen) return;
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -52,19 +55,19 @@ export function ClipboardPermissionModal() {
 
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [permissionPromptOpen, handleDismiss]);
+  }, [isOpen, handleDismiss]);
 
   useEffect(() => {
-    if (!permissionPromptOpen) return;
+    if (!isOpen) return;
 
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = originalOverflow;
     };
-  }, [permissionPromptOpen]);
+  }, [isOpen]);
 
-  if (!mounted || !permissionPromptOpen || pathname?.startsWith("/viewer")) {
+  if (!isOpen) {
     return null;
   }
 
