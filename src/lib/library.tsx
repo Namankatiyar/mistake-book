@@ -23,6 +23,7 @@ import {
 } from "./idb";
 import { newId, todayKey, type Question, type Source } from "./model";
 import { cacheImageBlob, evictImage } from "./image-cache";
+import { computeImageHash } from "./image-hash";
 import { useToast } from "./toast";
 
 export type NewQuestion = {
@@ -153,7 +154,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         isDeleted: false,
       };
       try {
-        await putQuestionWithImage(q, input.image);
+        const imageHash = await computeImageHash(input.image);
+        await putQuestionWithImage(q, input.image, imageHash);
         await enqueueSyncItem("question", q.id, "upsert");
       } catch {
         push("Couldn't save — browser storage may be full");

@@ -2,8 +2,9 @@ import SQLiteAsyncESMFactory from "wa-sqlite/dist/wa-sqlite-async.mjs";
 import * as SQLite from "wa-sqlite";
 import { IDBBatchAtomicVFS } from "wa-sqlite/src/examples/IDBBatchAtomicVFS.js";
 import { drizzle, type SqliteRemoteDatabase } from "drizzle-orm/sqlite-proxy";
-import { eq, desc, inArray, count } from "drizzle-orm";
+import { eq, desc, inArray, count, and, isNull } from "drizzle-orm";
 import * as schema from "@/db/schema";
+import { computeBytesHash } from "./image-hash";
 import { newId, type Question, type Source } from "./model";
 
 export type SqliteDatabase = SqliteRemoteDatabase<typeof schema>;
@@ -470,6 +471,7 @@ export async function getDb(): Promise<SqliteInstance> {
 
         CREATE INDEX IF NOT EXISTS idx_questions_created_at ON questions(created_at);
         CREATE INDEX IF NOT EXISTS idx_questions_subject ON questions(subject_id);
+        CREATE INDEX IF NOT EXISTS idx_question_images_hash ON question_images(image_hash);
 
         CREATE TABLE IF NOT EXISTS sync_queue (
           id TEXT PRIMARY KEY,
@@ -981,4 +983,50 @@ export async function updateQuestionImageHash(
       imageHash,
     })
     .where(eq(schema.questionImages.questionId, questionId));
+}
+
+export async function hasActiveQuestionImageHash(hash: string): Promise<boolean> {
+  if (!isBrowser() || !hash) return false;
+  const { db } = await getDb();
+
+  const match = await db
+    .select({ questionId: schema.questionImages.questionId })
+    .from(schema.questionImages)
+    .innerJoin(schema.questions, eq(schema.questionImages.questionId, schema.questions.id))
+    .where(and(eq(schema.questions.isDeleted, false), eq(schema.questionImages.imageHash, hash)))
+    .limit(1);
+
+  if (match.length > 0) {
+    return true;
+  }
+
+  // Lazily compute and persist hashes for legacy active rows where image_hash is NULL
+  const legacyRows = await db
+    .select({ questionId: schema.questionImages.questionId })
+    .from(schema.questionImages)
+    .innerJoin(schema.questions, eq(schema.questionImages.questionId, schema.questions.id))
+    .where(and(eq(schema.questions.isDeleted, false), isNull(schema.questionImages.imageHash)));
+
+  const BATCH_SIZE = 10;
+  for (let i = 0; i < legacyRows.length; i += BATCH_SIZE) {
+    const batchIds = legacyRows.slice(i, i + BATCH_SIZE).map((r) => r.questionId);
+    const imageRows = await db
+      .select({
+        questionId: schema.questionImages.questionId,
+        image: schema.questionImages.image,
+      })
+      .from(schema.questionImages)
+      .where(inArray(schema.questionImages.questionId, batchIds));
+
+    for (const row of imageRows) {
+      const bytes = toUint8Array(row.image);
+      const computedHash = await computeBytesHash(bytes);
+      await updateQuestionImageHash(row.questionId, computedHash);
+      if (computedHash === hash) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
