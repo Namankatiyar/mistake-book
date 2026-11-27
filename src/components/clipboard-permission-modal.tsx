@@ -3,13 +3,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { usePathname } from "next/navigation";
-import { ClipboardCheck, ShieldCheck } from "lucide-react";
+import { ClipboardCheck } from "lucide-react";
 import { useCapture } from "@/components/capture";
-import { useSettings } from "@/lib/settings";
 
 export function ClipboardPermissionModal() {
   const pathname = usePathname();
-  const { update } = useSettings();
   const {
     permissionPromptOpen,
     dismissPermissionPrompt,
@@ -25,11 +23,6 @@ export function ClipboardPermissionModal() {
   const handleDismiss = useCallback(() => {
     dismissPermissionPrompt();
   }, [dismissPermissionPrompt]);
-
-  const handleTurnOff = useCallback(() => {
-    update({ autoClipboardCapture: false });
-    dismissPermissionPrompt();
-  }, [update, dismissPermissionPrompt]);
 
   const handleAllow = () => {
     if (requesting) return;
@@ -85,38 +78,30 @@ export function ClipboardPermissionModal() {
       }}
     >
       <div
-        className="relative w-full max-w-[420px] rounded-[24px] sm:rounded-[28px] border border-line bg-surface px-8 pt-9 pb-8 sm:px-10 sm:pt-10 sm:pb-9 shadow-2xl flex flex-col items-center text-center animate-in zoom-in-95 duration-200"
+        className="relative w-full max-w-[420px] rounded-[24px] sm:rounded-[28px] border border-line bg-surface px-8 pt-9 pb-8 sm:px-10 sm:pt-11 sm:pb-9 shadow-2xl flex flex-col items-center text-center animate-in zoom-in-95 duration-200"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl border border-line bg-soft text-fg">
-          <ClipboardCheck className="h-6 w-6" aria-hidden="true" />
+        <div className="mb-6 flex items-center justify-center text-fg">
+          <ClipboardCheck
+            className="w-[46px] h-[46px] shrink-0"
+            strokeWidth={1.6}
+            aria-hidden="true"
+          />
         </div>
 
         <h2
           id="clipboard-permission-title"
           className="text-[20px] sm:text-[22px] font-semibold text-fg leading-snug tracking-tight mb-2.5 max-w-[340px]"
         >
-          Enable always-on clipboard detection
+          Allow clipboard access to auto-detect copied images.
         </h2>
 
         <p
           id="clipboard-permission-desc"
-          className="text-[14px] sm:text-[15px] text-muted leading-relaxed mb-5 max-w-[330px]"
+          className="text-[14px] sm:text-[15px] text-muted leading-relaxed mb-7 sm:mb-8 max-w-[320px]"
         >
-          Automatically open a question draft when you switch back to this tab with a new screenshot on your clipboard.
+          MistakeBook only checks your current image locally — never your clipboard history.
         </p>
-
-        <div className="w-full rounded-[14px] border border-line bg-soft/70 px-4 py-3 text-left mb-6 flex items-start gap-2.5">
-          <ShieldCheck className="h-4 w-4 shrink-0 text-fg mt-0.5" aria-hidden="true" />
-          <div className="text-[12.5px] leading-relaxed text-muted">
-            <p className="font-semibold text-fg">
-              We do not have access to your clipboard history.
-            </p>
-            <p className="mt-0.5">
-              MistakeBook only checks the current image on your clipboard locally on your device when you return to this tab.
-            </p>
-          </div>
-        </div>
 
         <button
           type="button"
@@ -124,25 +109,16 @@ export function ClipboardPermissionModal() {
           onClick={handleAllow}
           className="w-full h-12 rounded-[12px] sm:rounded-[14px] bg-[#18181b] text-white hover:bg-[#27272a] active:bg-[#09090b] dark:bg-white dark:text-[#18181b] dark:hover:bg-neutral-100 dark:active:bg-neutral-200 disabled:opacity-60 font-semibold text-[15px] sm:text-[16px] transition-colors cursor-pointer flex items-center justify-center shadow-sm"
         >
-          {requesting ? "Requesting access…" : "Allow always-on access"}
+          {requesting ? "Requesting…" : "Allow access"}
         </button>
 
-        <div className="mt-3.5 sm:mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
-          <button
-            type="button"
-            onClick={handleTurnOff}
-            className="text-[13.5px] sm:text-[14px] text-muted hover:text-fg font-normal transition-colors cursor-pointer py-1 px-2"
-          >
-            Turn off auto-detect
-          </button>
-          <button
-            type="button"
-            onClick={handleDismiss}
-            className="text-[13.5px] sm:text-[14px] text-muted hover:text-fg font-normal transition-colors cursor-pointer py-1 px-2"
-          >
-            Not now
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={handleDismiss}
+          className="mt-3.5 sm:mt-4 text-[14px] sm:text-[15px] text-muted hover:text-fg font-normal transition-colors cursor-pointer py-1 px-3"
+        >
+          Not now
+        </button>
       </div>
     </div>
   );
