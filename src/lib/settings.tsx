@@ -23,6 +23,8 @@ export type Settings = {
   viewerTags: boolean;
   /** Show the tag-editing panel in the viewer (off by default). */
   viewerEdit: boolean;
+  /** Automatically detect copied images on the clipboard when returning to the tab. */
+  autoClipboardCapture: boolean;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -31,6 +33,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showAnswers: false,
   viewerTags: true,
   viewerEdit: false,
+  autoClipboardCapture: true,
 };
 
 const SETTINGS_KEY = "mb.settings";
@@ -45,6 +48,10 @@ export function readSettings(): Settings {
       ...DEFAULT_SETTINGS,
       ...parsed,
       examMode: parsed.examMode === "neet" ? "neet" : "jee",
+      autoClipboardCapture:
+        typeof parsed.autoClipboardCapture === "boolean"
+          ? parsed.autoClipboardCapture
+          : DEFAULT_SETTINGS.autoClipboardCapture,
     };
   } catch {
     return DEFAULT_SETTINGS;

@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { AlertCircle, DatabaseBackup, RefreshCw, RotateCw } from "lucide-react";
+import { useCapture } from "@/components/capture";
 import { Button, ConfirmAction, IconButton, Kbd, Modal, Toggle } from "@/components/ui";
 import { useLibrary } from "@/lib/library";
 import { useSettings, type Theme, type ExamMode } from "@/lib/settings";
@@ -114,6 +115,8 @@ export function SettingsModal({
   onClose: () => void;
 }) {
   const { settings, update } = useSettings();
+  const { clipboardSupported, clipboardPermission, requestClipboardPermission } =
+    useCapture();
   const { sources, questions, allQuestions, addSource, deleteSource } = useLibrary();
   const allLibraryQuestions = allQuestions && allQuestions.length > 0 ? allQuestions : questions;
   const {
@@ -485,6 +488,55 @@ export function SettingsModal({
               )}
             </>
           )}
+        </Section>
+
+        <Section title="Clipboard">
+          <Row
+            title="Auto-detect clipboard images"
+            desc="When enabled, returning to this tab with a new copied image opens the draft modal automatically. We do not have access to your clipboard history."
+            control={
+              <Toggle
+                checked={settings.autoClipboardCapture}
+                onChange={(next) => {
+                  update({ autoClipboardCapture: next });
+                  if (
+                    next &&
+                    clipboardSupported &&
+                    (clipboardPermission === "prompt" ||
+                      clipboardPermission === "denied")
+                  ) {
+                    void requestClipboardPermission();
+                  }
+                }}
+                label="Auto-detect clipboard images"
+              />
+            }
+          />
+          <div className="flex items-start gap-2 px-4 py-2.5 text-[12px] text-muted">
+            <span
+              className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                !clipboardSupported
+                  ? "bg-neutral-400"
+                  : clipboardPermission === "granted"
+                    ? "bg-emerald-500"
+                    : clipboardPermission === "denied"
+                      ? "bg-red-500"
+                      : "bg-amber-500"
+              }`}
+              aria-hidden="true"
+            />
+            <span>
+              {!clipboardSupported
+                ? "Automatic clipboard reading is unavailable in this browser or non-HTTPS context. Manual paste (Ctrl+V) still works."
+                : clipboardPermission === "granted"
+                  ? settings.autoClipboardCapture
+                    ? "Always-on clipboard permission granted — auto-detection is active."
+                    : "Clipboard permission is granted, but auto-detect is currently off."
+                  : clipboardPermission === "denied"
+                    ? "Clipboard access is blocked in your browser. Allow Clipboard in this site's permissions (address bar settings) and toggle this on."
+                    : "Browser permission required — toggle on or allow when prompted to enable always-on detection."}
+            </span>
+          </div>
         </Section>
 
         <Section title="List">

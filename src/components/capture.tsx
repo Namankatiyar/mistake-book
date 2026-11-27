@@ -10,11 +10,19 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { usePathname } from "next/navigation";
 import { useObjectUrl } from "@/lib/hooks";
+import { hasActiveQuestionImageHash } from "@/lib/idb";
+import {
+  computeImageHash,
+  isClipboardHashSeen,
+  markClipboardHashSeen,
+} from "@/lib/image-hash";
 import { useLibrary } from "@/lib/library";
 import { newId } from "@/lib/model";
 import {
   readCaptureDefaults,
+  useSettings,
   writeCaptureDefaults,
   type CaptureDefaults,
 } from "@/lib/settings";
@@ -23,6 +31,7 @@ import {
   subjectById,
   subjectOfChapter,
 } from "@/lib/syllabus";
+import { useDriveSync } from "@/lib/sync-context";
 import { mistakeById } from "@/lib/model";
 import { toast } from "sonner";
 import { MistakeField, SourceField, SubjectChapterFields } from "./fields";
@@ -35,13 +44,24 @@ export type ActiveCaptureFilters = {
   sourceId?: string | null;
 };
 
-type Draft = { key: string; blob: Blob | null };
+export type ClipboardPermissionState =
+  | "granted"
+  | "prompt"
+  | "denied"
+  | "unsupported";
+
+type Draft = { key: string; blob: Blob | null; imageHash?: string };
 
 const CaptureContext = createContext<{
   openModal: () => void;
   openPicker: () => void;
   openFileDialog: () => void;
   setActiveFilters: (filters: ActiveCaptureFilters | null) => void;
+  clipboardSupported: boolean;
+  clipboardPermission: ClipboardPermissionState;
+  permissionPromptOpen: boolean;
+  dismissPermissionPrompt: () => void;
+  requestClipboardPermission: () => Promise<"granted" | "denied" | "unsupported">;
 } | null>(null);
 
 export function useCapture() {
@@ -83,21 +103,42 @@ function getSessionFilters(): ActiveCaptureFilters | null {
   }
 }
 
+const CLIPBOARD_GRANTED_KEY = "mb.clipboard_permission_granted";
+const CLIPBOARD_DISMISSED_KEY = "mb.clipboard_permission_dismissed";
+const PREFERRED_IMAGE_TYPES = ["image/png", "image/webp", "image/jpeg"] as const;
+
+function pickBestImageMime(types: readonly string[]): string | null {
+  for (const preferred of PREFERRED_IMAGE_TYPES) {
+    if (types.includes(preferred)) return preferred;
+  }
+  return types.find((t) => t.startsWith("image/")) ?? null;
+}
+
+async function extractImagesFromClipboardItems(
+  items: ClipboardItems,
+): Promise<File[]> {
+  const files: File[] = [];
+  for (const item of items) {
+    const type = pickBestImageMime(item.types);
+    if (!type) continue;
+    try {
+      const blob = await item.getType(type);
+      if (blob.size === 0) continue;
+      const rawExt = type.split("/")[1]?.split("+")[0] || "png";
+      const ext = rawExt === "jpeg" ? "jpg" : rawExt;
+      files.push(new File([blob], `screenshot.${ext}`, { type }));
+    } catch {
+      // Skip unreadable clipboard image item
+    }
+  }
+  return files;
+}
+
 async function extractClipboardFiles(): Promise<File[]> {
   if (typeof navigator === "undefined" || !navigator.clipboard?.read) return [];
   try {
     const items = await navigator.clipboard.read();
-    const files: File[] = [];
-    for (const item of items) {
-      for (const type of item.types) {
-        if (type.startsWith("image/")) {
-          const blob = await item.getType(type);
-          const ext = type.split("/")[1] || "png";
-          files.push(new File([blob], `screenshot.${ext}`, { type }));
-        }
-      }
-    }
-    return files;
+    return await extractImagesFromClipboardItems(items);
   } catch {
     return [];
   }
@@ -138,7 +179,10 @@ function imageFiles(list: Iterable<File | null>): File[] {
 }
 
 export function CaptureProvider({ children }: { children: ReactNode }) {
-  const { addQuestion, sources } = useLibrary();
+  const pathname = usePathname();
+  const { addQuestion, sources, ready } = useLibrary();
+  const { settings, update: updateSettings } = useSettings();
+  const { authChecked, signInModalOpen } = useDriveSync();
   const [defaults, setDefaults] = useState<CaptureDefaults>({
     subjectId: "phy",
     chapterId: "phy-units",
@@ -146,6 +190,12 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
   });
   const [queue, setQueue] = useState<Draft[]>([]);
   const [dragging, setDragging] = useState(false);
+  const [clipboardSupported, setClipboardSupported] = useState(false);
+  const [clipboardPermission, setClipboardPermission] =
+    useState<ClipboardPermissionState>("unsupported");
+  const [permissionChecked, setPermissionChecked] = useState(false);
+  const [permissionPromptOpen, setPermissionPromptOpen] = useState(false);
+
   const shiftHeld = useRef(false);
   const dragDepth = useRef(0);
   const pickerRef = useRef<HTMLInputElement>(null);
@@ -153,8 +203,38 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
   defaultsRef.current = defaults;
   const sourcesRef = useRef(sources);
   sourcesRef.current = sources;
+  const queueRef = useRef<Draft[]>(queue);
+  queueRef.current = queue;
   const activeFiltersRef = useRef<ActiveCaptureFilters | null>(null);
   const lastInstantSaveTime = useRef(0);
+
+  const pathnameRef = useRef(pathname);
+  pathnameRef.current = pathname;
+  const readyRef = useRef(ready);
+  readyRef.current = ready;
+  const autoCaptureRef = useRef(settings.autoClipboardCapture);
+  autoCaptureRef.current = settings.autoClipboardCapture;
+  const draggingRef = useRef(dragging);
+  draggingRef.current = dragging;
+  const clipboardSupportedRef = useRef(clipboardSupported);
+  clipboardSupportedRef.current = clipboardSupported;
+  const clipboardPermissionRef = useRef(clipboardPermission);
+  clipboardPermissionRef.current = clipboardPermission;
+  const permissionCheckedRef = useRef(permissionChecked);
+  permissionCheckedRef.current = permissionChecked;
+  const permissionPromptOpenRef = useRef(permissionPromptOpen);
+  permissionPromptOpenRef.current = permissionPromptOpen;
+  const authCheckedRef = useRef(authChecked);
+  authCheckedRef.current = authChecked;
+  const signInModalOpenRef = useRef(signInModalOpen);
+  signInModalOpenRef.current = signInModalOpen;
+
+  const checkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isCheckingRef = useRef(false);
+  const lastCheckAtRef = useRef(0);
+  const didMountCheckRef = useRef(false);
+  const blockedByAuthRef = useRef(false);
+  const mountGraceUntilRef = useRef(0);
 
   const setActiveFilters = useCallback((filters: ActiveCaptureFilters | null) => {
     activeFiltersRef.current = filters;
@@ -162,37 +242,236 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setDefaults(readCaptureDefaults());
+    mountGraceUntilRef.current = Date.now() + 350;
   }, []);
 
-  const enqueue = useCallback((files: File[]) => {
-    if (files.length === 0) return;
-    setQueue((prev) => {
-      if (prev.length > 0 && prev[0].blob === null) {
-        const [first, ...rest] = prev;
-        const attachedFirst: Draft = { ...first, blob: files[0] };
-        const additional = files.slice(1).map((f) => ({ key: newId(), blob: f }));
-        return [attachedFirst, ...rest, ...additional];
+  const markBlobSeen = useCallback((blob: Blob) => {
+    void computeImageHash(blob)
+      .then((hash) => {
+        markClipboardHashSeen(hash);
+        setQueue((prev) =>
+          prev.map((d) =>
+            d.blob === blob && !d.imageHash ? { ...d, imageHash: hash } : d,
+          ),
+        );
+      })
+      .catch(() => {
+        // Ignore hash failures on manual capture
+      });
+  }, []);
+
+  const filterNewClipboardFiles = useCallback(
+    async (files: File[]): Promise<{ file: File; hash: string }[]> => {
+      const results: { file: File; hash: string }[] = [];
+      const batchSeen = new Set<string>();
+      for (const file of files) {
+        try {
+          const hash = await computeImageHash(file);
+          if (batchSeen.has(hash)) continue;
+          if (queueRef.current.some((d) => d.imageHash === hash)) continue;
+          if (isClipboardHashSeen(hash)) continue;
+          if (await hasActiveQuestionImageHash(hash)) continue;
+          batchSeen.add(hash);
+          results.push({ file, hash });
+        } catch {
+          // Skip files that cannot be hashed
+        }
       }
-      return [
-        ...prev,
-        ...files.map((f) => ({ key: newId(), blob: f })),
-      ];
-    });
+      return results;
+    },
+    [],
+  );
+
+  // Detect clipboard-read support and subscribe to permission changes
+  useEffect(() => {
+    const supported =
+      typeof window !== "undefined" &&
+      window.isSecureContext &&
+      typeof navigator !== "undefined" &&
+      typeof navigator.clipboard?.read === "function";
+    setClipboardSupported(supported);
+
+    if (!supported) {
+      setClipboardPermission("unsupported");
+      setPermissionChecked(true);
+      return;
+    }
+
+    let cancelled = false;
+    let permStatus: PermissionStatus | null = null;
+
+    const applyFallbackPermission = () => {
+      let granted = false;
+      try {
+        granted = window.localStorage.getItem(CLIPBOARD_GRANTED_KEY) === "true";
+      } catch {
+        // Ignore storage errors
+      }
+      if (!cancelled) {
+        setClipboardPermission(granted ? "granted" : "prompt");
+        setPermissionChecked(true);
+      }
+    };
+
+    const initPermission = async () => {
+      if (typeof navigator.permissions?.query !== "function") {
+        applyFallbackPermission();
+        return;
+      }
+      try {
+        permStatus = await navigator.permissions.query({
+          name: "clipboard-read" as PermissionName,
+        });
+        if (cancelled) return;
+        setClipboardPermission(permStatus.state);
+        setPermissionChecked(true);
+        permStatus.onchange = () => {
+          if (!permStatus) return;
+          setClipboardPermission(permStatus.state);
+          if (permStatus.state !== "prompt") {
+            setPermissionPromptOpen(false);
+          }
+        };
+      } catch {
+        applyFallbackPermission();
+      }
+    };
+
+    void initPermission();
+
+    return () => {
+      cancelled = true;
+      if (permStatus) {
+        permStatus.onchange = null;
+      }
+    };
   }, []);
 
-  const replaceCurrentBlob = useCallback((file: File) => {
-    setQueue((prev) => {
-      if (prev.length === 0) return [{ key: newId(), blob: file }];
-      const [first, ...rest] = prev;
-      return [{ ...first, blob: file }, ...rest];
-    });
+  const dismissPermissionPrompt = useCallback(() => {
+    setPermissionPromptOpen(false);
+    try {
+      window.localStorage.setItem(CLIPBOARD_DISMISSED_KEY, "true");
+    } catch {
+      // Ignore storage errors
+    }
   }, []);
+
+  const requestClipboardPermission = useCallback(async (): Promise<
+    "granted" | "denied" | "unsupported"
+  > => {
+    try {
+      window.localStorage.removeItem(CLIPBOARD_DISMISSED_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+
+    const supported =
+      clipboardSupportedRef.current ||
+      (typeof window !== "undefined" &&
+        window.isSecureContext &&
+        typeof navigator !== "undefined" &&
+        typeof navigator.clipboard?.read === "function");
+
+    if (!supported) {
+      return "unsupported";
+    }
+
+    try {
+      // Must be the first await to preserve browser user activation
+      const items = await navigator.clipboard.read();
+      setClipboardPermission("granted");
+      try {
+        window.localStorage.setItem(CLIPBOARD_GRANTED_KEY, "true");
+      } catch {
+        // Ignore storage errors
+      }
+      setPermissionPromptOpen(false);
+
+      const files = await extractImagesFromClipboardItems(items);
+      const newItems = await filterNewClipboardFiles(files);
+      if (newItems.length > 0 && queueRef.current.length === 0) {
+        for (const item of newItems) {
+          markClipboardHashSeen(item.hash);
+        }
+        setQueue(
+          newItems.map(({ file, hash }) => ({
+            key: newId(),
+            blob: file,
+            imageHash: hash,
+          })),
+        );
+      } else {
+        toast.success("Always-on clipboard detection enabled");
+      }
+      return "granted";
+    } catch (err) {
+      const name =
+        err instanceof DOMException
+          ? err.name
+          : (err as { name?: string } | null)?.name;
+      setClipboardPermission("denied");
+      try {
+        window.localStorage.removeItem(CLIPBOARD_GRANTED_KEY);
+      } catch {
+        // Ignore storage errors
+      }
+      setPermissionPromptOpen(false);
+      updateSettings({ autoClipboardCapture: false });
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        toast.info(
+          "Clipboard access was blocked. You can re-enable it in your browser site settings.",
+        );
+      } else {
+        toast.info(
+          "Clipboard access could not be enabled. You can re-enable it in your browser site settings.",
+        );
+      }
+      return "denied";
+    }
+  }, [filterNewClipboardFiles, updateSettings]);
+
+  const enqueue = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) return;
+      setQueue((prev) => {
+        if (prev.length > 0 && prev[0].blob === null) {
+          const [first, ...rest] = prev;
+          const attachedFirst: Draft = {
+            ...first,
+            blob: files[0],
+            imageHash: undefined,
+          };
+          const additional = files
+            .slice(1)
+            .map((f) => ({ key: newId(), blob: f }));
+          return [attachedFirst, ...rest, ...additional];
+        }
+        return [...prev, ...files.map((f) => ({ key: newId(), blob: f }))];
+      });
+      for (const file of files) {
+        markBlobSeen(file);
+      }
+    },
+    [markBlobSeen],
+  );
+
+  const replaceCurrentBlob = useCallback(
+    (file: File) => {
+      setQueue((prev) => {
+        if (prev.length === 0) return [{ key: newId(), blob: file }];
+        const [first, ...rest] = prev;
+        return [{ ...first, blob: file, imageHash: undefined }, ...rest];
+      });
+      markBlobSeen(file);
+    },
+    [markBlobSeen],
+  );
 
   const removeCurrentBlob = useCallback(() => {
     setQueue((prev) => {
       if (prev.length === 0) return prev;
       const [first, ...rest] = prev;
-      return [{ ...first, blob: null }, ...rest];
+      return [{ ...first, blob: null, imageHash: undefined }, ...rest];
     });
   }, []);
 
@@ -226,6 +505,8 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
 
       let saved = 0;
       for (const f of files) {
+        const hash = await computeImageHash(f).catch(() => null);
+        if (hash) markClipboardHashSeen(hash);
         const q = await addQuestion({
           image: f,
           subjectId,
@@ -377,6 +658,135 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
     };
   }, [enqueue]);
 
+  const runClipboardCheck = useCallback(async () => {
+    if (isCheckingRef.current) return;
+    const now = Date.now();
+    if (now - lastCheckAtRef.current < 500) return;
+    if (!clipboardSupportedRef.current || !permissionCheckedRef.current) return;
+    if (!readyRef.current || !autoCaptureRef.current || draggingRef.current) return;
+    if (pathnameRef.current?.startsWith("/viewer")) return;
+    if (
+      typeof document === "undefined" ||
+      document.visibilityState !== "visible" ||
+      !document.hasFocus()
+    ) {
+      return;
+    }
+    if (queueRef.current.length > 0) return;
+    if (document.querySelector('[role="dialog"]') !== null) return;
+
+    const permission = clipboardPermissionRef.current;
+
+    if (permission === "granted") {
+      lastCheckAtRef.current = now;
+      isCheckingRef.current = true;
+      try {
+        const files = await extractClipboardFiles();
+        if (files.length === 0) return;
+        const newItems = await filterNewClipboardFiles(files);
+        if (newItems.length === 0) return;
+        if (
+          !autoCaptureRef.current ||
+          draggingRef.current ||
+          pathnameRef.current?.startsWith("/viewer") ||
+          queueRef.current.length > 0 ||
+          document.querySelector('[role="dialog"]') !== null
+        ) {
+          return;
+        }
+        for (const item of newItems) {
+          markClipboardHashSeen(item.hash);
+        }
+        setQueue(
+          newItems.map(({ file, hash }) => ({
+            key: newId(),
+            blob: file,
+            imageHash: hash,
+          })),
+        );
+      } catch {
+        // Silently ignore background clipboard read failures (e.g. NotAllowedError)
+      } finally {
+        isCheckingRef.current = false;
+        lastCheckAtRef.current = Date.now();
+      }
+      return;
+    }
+
+    if (permission === "prompt") {
+      if (!authCheckedRef.current || signInModalOpenRef.current) {
+        blockedByAuthRef.current = true;
+        return;
+      }
+      blockedByAuthRef.current = false;
+      lastCheckAtRef.current = now;
+      let dismissed = false;
+      try {
+        dismissed =
+          window.localStorage.getItem(CLIPBOARD_DISMISSED_KEY) === "true";
+      } catch {
+        // Ignore storage errors
+      }
+      if (!dismissed && !permissionPromptOpenRef.current) {
+        setPermissionPromptOpen(true);
+      }
+    }
+  }, [filterNewClipboardFiles]);
+
+  const scheduleClipboardCheck = useCallback(
+    (delayMs = 100) => {
+      if (checkTimerRef.current !== null) {
+        clearTimeout(checkTimerRef.current);
+      }
+      const remainingMountGrace = Math.max(
+        0,
+        mountGraceUntilRef.current - Date.now(),
+      );
+      const effectiveDelay = Math.max(delayMs, remainingMountGrace);
+      checkTimerRef.current = setTimeout(() => {
+        checkTimerRef.current = null;
+        void runClipboardCheck();
+      }, effectiveDelay);
+    },
+    [runClipboardCheck],
+  );
+
+  // Trigger clipboard check on tab focus and visibility return
+  useEffect(() => {
+    const onFocus = () => {
+      scheduleClipboardCheck(100);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        scheduleClipboardCheck(100);
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      if (checkTimerRef.current !== null) {
+        clearTimeout(checkTimerRef.current);
+        checkTimerRef.current = null;
+      }
+    };
+  }, [scheduleClipboardCheck]);
+
+  // Run once on mount after library & permission check become ready
+  useEffect(() => {
+    if (!ready || !permissionChecked || didMountCheckRef.current) return;
+    didMountCheckRef.current = true;
+    scheduleClipboardCheck(350);
+  }, [ready, permissionChecked, scheduleClipboardCheck]);
+
+  // Retry prompt check once auth status check completes (if deferred earlier)
+  useEffect(() => {
+    if (!authChecked || signInModalOpen || !blockedByAuthRef.current) return;
+    blockedByAuthRef.current = false;
+    scheduleClipboardCheck(100);
+  }, [authChecked, signInModalOpen, scheduleClipboardCheck]);
+
   const saveDraft = useCallback(
     async (values: {
       subjectId: string;
@@ -388,6 +798,10 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
     }) => {
       const current = queue[0];
       if (!current || !current.blob) return;
+      const hash =
+        current.imageHash ??
+        (await computeImageHash(current.blob).catch(() => null));
+      if (hash) markClipboardHashSeen(hash);
       const q = await addQuestion({ image: current.blob, ...values });
       if (!q) return;
       const next: CaptureDefaults = {
@@ -405,12 +819,41 @@ export function CaptureProvider({ children }: { children: ReactNode }) {
   );
 
   const discardDraft = useCallback(() => {
+    const current = queueRef.current[0];
+    if (current?.blob) {
+      if (current.imageHash) {
+        markClipboardHashSeen(current.imageHash);
+      } else {
+        void computeImageHash(current.blob)
+          .then((hash) => markClipboardHashSeen(hash))
+          .catch(() => {});
+      }
+    }
     setQueue((prev) => prev.slice(1));
   }, []);
 
   const value = useMemo(
-    () => ({ openModal, openPicker: openModal, openFileDialog, setActiveFilters }),
-    [openModal, openFileDialog, setActiveFilters],
+    () => ({
+      openModal,
+      openPicker: openModal,
+      openFileDialog,
+      setActiveFilters,
+      clipboardSupported,
+      clipboardPermission,
+      permissionPromptOpen,
+      dismissPermissionPrompt,
+      requestClipboardPermission,
+    }),
+    [
+      openModal,
+      openFileDialog,
+      setActiveFilters,
+      clipboardSupported,
+      clipboardPermission,
+      permissionPromptOpen,
+      dismissPermissionPrompt,
+      requestClipboardPermission,
+    ],
   );
   const current = queue[0];
 

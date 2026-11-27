@@ -65,18 +65,7 @@ export function formatQuestionFileName(question: {
   return `${dateStr}_${mistake}_${shortId}.png`;
 }
 
-export async function computeBytesHash(bytes: Uint8Array): Promise<string> {
-  const hashBuffer = await crypto.subtle.digest("SHA-256", bytes as unknown as BufferSource);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-export async function computeImageHash(blob: Blob): Promise<string> {
-  const buffer = await blob.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-}
+export { computeBytesHash, computeImageHash } from "./image-hash";
 
 async function driveFetch(
   url: string,
